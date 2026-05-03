@@ -1,0 +1,564 @@
+\documentclass[runningheads]{llncs}
+
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{float}
+
+% ── Code listing style ─────────────────────────────────────────────────────
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue}\bfseries,
+  commentstyle=\color{gray},
+  stringstyle=\color{orange},
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  xleftmargin=1.5em,
+}
+
+% ── Metadata ───────────────────────────────────────────────────────────────
+\begin{document}
+
+\title{Poblado en Evolución:\\
+Simulación de Eventos Discretos de una Dinámica Poblacional}
+
+\titlerunning{Poblado en Evolución}
+
+\author{[Nombre y Apellidos del Estudiante]\inst{1}}
+
+\authorrunning{[Apellido del Estudiante]}
+
+\institute{
+  Facultad de Matemática y Computación,\\
+  Universidad de La Habana, Cuba\\
+  \email{[correo@estudiante.uh.cu]}\\
+  Grupo: [Número de Grupo]
+}
+
+\maketitle
+
+% ── Abstract ───────────────────────────────────────────────────────────────
+\begin{abstract}
+Se presenta el diseño e implementación de una simulación de eventos discretos
+para modelar la evolución de una población humana a lo largo de 100 años.
+El modelo considera procesos demográficos como mortalidad por edad y sexo,
+formación y ruptura de parejas, embarazos y nacimientos múltiples.
+La implementación utiliza un enfoque de pasos mensuales (1\,200 iteraciones),
+en el que cada mes se evalúan secuencialmente los eventos relevantes para cada
+individuo. Los experimentos muestran que la tasa de supervivencia de la
+población depende críticamente del tamaño inicial y de la distribución de
+edades de partida. Se documentan todos los supuestos asumidos ante las
+ambigüedades del enunciado y se discuten sus implicaciones en los resultados.
+\keywords{Simulación de Eventos Discretos \and
+          Dinámica Poblacional \and
+          Variables Aleatorias \and
+          Modelo Basado en Individuos}
+\end{abstract}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Introducción}
+% ──────────────────────────────────────────────────────────────────────────
+
+El estudio de la evolución de poblaciones humanas es un problema clásico de
+demografía y epidemiología que puede abordarse mediante simulación.
+A diferencia de los modelos agregados (como el modelo de Lotka–Volterra o los
+compartimentales SIR), un modelo \emph{basado en individuos} permite capturar
+la heterogeneidad de la población: cada persona tiene su propio estado
+(edad, sexo, pareja, número de hijos), y las decisiones probabilísticas se
+evalúan a nivel individual~\cite{axtell2000}.
+
+El objetivo del problema es observar la evolución de una región con
+$M$~mujeres y $H$~hombres durante 100~años, partiendo de edades
+distribuidas uniformemente entre 0 y 100~años.
+El modelo incluye:
+
+\begin{itemize}
+  \item \textbf{Mortalidad} diferenciada por edad y sexo.
+  \item \textbf{Formación de parejas} condicionada a la edad y al deseo
+        de cada individuo.
+  \item \textbf{Rupturas} con probabilidad fija anual del 20\,\%.
+  \item \textbf{Embarazos} condicionados a tener pareja, edad fértil y
+        cuota de hijos deseados.
+  \item \textbf{Nacimientos} posiblemente múltiples.
+  \item \textbf{Períodos de soledad} tras rupturas o viudez.
+\end{itemize}
+
+Este documento sigue la estructura propuesta en el enunciado:
+sección~\ref{sec:modelo} describe el modelo de simulación;
+sección~\ref{sec:var_aleatorias} detalla la generación de variables
+aleatorias; sección~\ref{sec:supuestos} lista los supuestos adoptados;
+sección~\ref{sec:implementacion} presenta la arquitectura del código;
+sección~\ref{sec:experimentos} muestra los experimentos realizados;
+sección~\ref{sec:conclusiones} recoge las conclusiones.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Modelo de Simulación de Eventos Discretos}
+\label{sec:modelo}
+% ──────────────────────────────────────────────────────────────────────────
+
+\subsection{Entidades del Sistema}
+
+La entidad principal es la \textbf{Persona}, con los atributos descritos
+en la Tabla~\ref{tab:person}.
+
+\begin{table}[H]
+\caption{Atributos de la entidad Persona.}
+\label{tab:person}
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Atributo} & \textbf{Tipo} & \textbf{Descripción} \\
+\midrule
+\texttt{id}                          & entero  & Identificador único \\
+\texttt{sex}                         & cadena  & \texttt{'M'} o \texttt{'F'} \\
+\texttt{age\_months}                  & entero  & Edad en meses \\
+\texttt{alive}                       & booleano & Estado vital \\
+\texttt{partner\_id}                  & entero  & Id de la pareja (None si soltero) \\
+\texttt{children\_count}              & entero  & Hijos nacidos \\
+\texttt{children\_desired}            & entero  & Hijos que desea tener \\
+\texttt{pregnant}                    & booleano & Embarazo activo \\
+\texttt{pregnancy\_months\_remaining} & entero  & Meses para el parto \\
+\texttt{solitude\_months\_remaining}  & entero  & Meses hasta estar disponible \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La entidad secundaria es la \textbf{Pareja} (\texttt{Couple}), que
+agrupa los identificadores de los dos miembros y registra los meses
+que llevan juntos.
+
+\subsection{Estado del Sistema}
+
+El estado completo del sistema en el instante $t$ es:
+
+\[
+  S(t) = \bigl\langle \mathcal{P}(t),\; \mathcal{C}(t),\; t \bigr\rangle
+\]
+
+\noindent donde $\mathcal{P}(t)$ es el conjunto de personas vivas con sus
+atributos individuales y $\mathcal{C}(t)$ es el conjunto de parejas activas.
+
+\subsection{Eventos del Modelo}
+
+La Tabla~\ref{tab:events} lista los eventos evaluados mensualmente.
+
+\begin{table}[H]
+\caption{Eventos del modelo y sus condiciones de disparo.}
+\label{tab:events}
+\centering
+\begin{tabular}{lp{7cm}}
+\toprule
+\textbf{Evento} & \textbf{Descripción} \\
+\midrule
+Muerte           & Cada persona viva es evaluada con $p_{\text{mes}}$ según edad y sexo. \\
+Ruptura          & Cada pareja activa puede disolverse con $p_{\text{ruptura,mes}}$. \\
+Fin de soledad   & El contador de soledad de cada individuo decrementa en 1. \\
+Formación pareja & Solteros disponibles se evalúan por pares para formar pareja. \\
+Embarazo         & Mujeres con pareja y cuota disponible son evaluadas. \\
+Nacimiento       & Al término de los 9 meses de gestación nacen uno o más bebés. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Reloj de Simulación y Avance del Tiempo}
+
+Se utiliza un \textbf{reloj discreto} con paso de un mes.
+El horizonte de simulación es $T = 100\;\text{años} = 1\,200\;\text{meses}$.
+
+\begin{lstlisting}[language=Python, caption={Bucle mensual principal.}]
+for month in range(total_months):       # 0..1199
+    _age_everyone()
+    _process_deaths()
+    _process_breakups()
+    _process_solitude()
+    _process_partner_formation()
+    _process_pregnancies()
+    _process_births()
+    if (month + 1) % 12 == 0:
+        _record_stats()
+\end{lstlisting}
+
+El orden de los pasos dentro de cada mes no es arbitrario:
+primero se envejece (para que los rangos de edad sean correctos al evaluar
+probabilidades), luego se procesan las muertes (que pueden disolver parejas),
+luego las rupturas y la soledad, y finalmente los procesos reproductivos.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Generación de Variables Aleatorias}
+\label{sec:var_aleatorias}
+% ──────────────────────────────────────────────────────────────────────────
+
+Toda la aleatoriedad del modelo fluye a través del módulo
+\texttt{sim/random\_vars.py}.
+Se parte de la variable base $U \sim \mathcal{U}(0,1)$ proporcionada
+por el generador de Python (\texttt{random.random()}).
+
+\subsection{Distribución Uniforme}
+
+La edad inicial de cada persona se obtiene como:
+
+\[
+  \text{age\_months} = \lfloor U \cdot 100 \cdot 12 \rfloor, \quad U \sim \mathcal{U}(0,1).
+\]
+
+\subsection{Variable de Bernoulli}
+
+Todos los eventos binarios (¿muere? ¿se embaraza? ¿forman pareja?) se
+modelan como una variable de Bernoulli:
+
+\[
+  X \sim \text{Bernoulli}(p) \iff X = \mathbf{1}[U < p], \quad U \sim \mathcal{U}(0,1).
+\]
+
+\subsection{Distribución Exponencial}
+
+El período de soledad tras una ruptura o viudez distribuye exponencial.
+El enunciado da el parámetro $\lambda$ como \emph{tiempo medio} en meses;
+por tanto la duración de soledad es:
+
+\[
+  T_{\text{soledad}} = -\mu \ln(1 - U), \quad U \sim \mathcal{U}(0,1),
+\]
+
+\noindent donde $\mu$ es el tiempo medio de la Tabla~\ref{tab:soledad}.
+
+\begin{table}[H]
+\caption{Tiempo medio de soledad por rango de edad.}
+\label{tab:soledad}
+\centering
+\begin{tabular}{cc}
+\toprule
+\textbf{Rango de edad} & \textbf{$\mu$ (meses)} \\
+\midrule
+12--15  & 3  \\
+15--21  & 6  \\
+21--35  & 6  \\
+35--45  & 12 \\
+45--60  & 24 \\
+60--125 & 48 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Muestreo de Distribución Discreta (Inversión)}
+
+Los valores de número de hijos deseados y número de bebés nacidos se
+muestrean mediante el método de la transformada inversa sobre la CDF
+empírica normalizada.
+
+Para la distribución de hijos deseados, los pesos originales del enunciado
+son $w = [0.6, 0.75, 0.35, 0.2, 0.1, 0.05]$; la suma es
+$\sum w_i = 2.05$, por lo que se normalizan antes de construir la CDF.
+Esto se justifica porque el enunciado no afirma que la tabla sea una FMP,
+sino que indica probabilidades relativas.
+
+\[
+  F(k) = \sum_{j=1}^{k} \frac{w_j}{\sum_i w_i}, \qquad
+  X = \min\bigl\{k : F(k) > U\bigr\}, \quad U \sim \mathcal{U}(0,1).
+\]
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Supuestos del Modelo}
+\label{sec:supuestos}
+% ──────────────────────────────────────────────────────────────────────────
+
+El enunciado presenta varias ambigüedades.
+A continuación se documentan las decisiones adoptadas.
+
+\begin{description}
+  \item[S1. Frecuencia de evaluación de la muerte.]
+        Las tablas de mortalidad se interpretan como probabilidades anuales.
+        Para convertirlas a probabilidades mensuales se utiliza:
+        \[
+          p_{\text{mes}} = 1 - (1 - p_{\text{anual}})^{1/12}.
+        \]
+        Esta conversión asume que la probabilidad de supervivencia mensual
+        es constante dentro del año.
+
+  \item[S2. Probabilidades de embarazo.]
+        Se interpretan como probabilidades mensuales directas, dado que los
+        valores son pequeños y representan la probabilidad de concepción en
+        cada mes de ciclo fértil.
+
+  \item[S3. Probabilidad de ruptura.]
+        La probabilidad anual de 0.2 se convierte a mensual análogamente a
+        la mortalidad: $p_{\text{ruptura,mes}} = 1 - 0.8^{1/12} \approx 0.01848$.
+
+  \item[S4. Tabla de hijos deseados.]
+        Los pesos no suman 1; se normalizan para construir una FMP válida.
+
+  \item[S5. Duración del embarazo.]
+        Se asumen exactamente 9~meses de gestación.
+
+  \item[S6. Edad inicial.]
+        La edad inicial se toma como $U(0, 100)$ años, convertida a meses
+        enteros.
+
+  \item[S7. Emparejamiento.]
+        En cada mes, las listas de hombres y mujeres disponibles se barajan
+        y se itera secuencialmente (no todos contra todos) para evitar
+        complejidad cuadrática.
+
+  \item[S8. Período mínimo de soledad.]
+        Si la variable exponencial produce un valor menor a 1~mes, se redondea
+        a 1~mes para evitar retornos inmediatos al mercado de parejas.
+
+  \item[S9. Número de hijos deseados de la pareja.]
+        Para decidir si la mujer puede embarazarse, se toma el máximo de los
+        hijos deseados de ambos miembros de la pareja.
+\end{description}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Implementación}
+\label{sec:implementacion}
+% ──────────────────────────────────────────────────────────────────────────
+
+\subsection{Arquitectura del Proyecto}
+
+El proyecto se organiza en los módulos de la Tabla~\ref{tab:modules}.
+
+\begin{table}[H]
+\caption{Módulos del proyecto y sus responsabilidades.}
+\label{tab:modules}
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Módulo} & \textbf{Responsabilidad} \\
+\midrule
+\texttt{sim/tables.py}     & Tablas de probabilidad del enunciado y funciones de lookup \\
+\texttt{sim/random\_vars.py} & Generadores de variables aleatorias \\
+\texttt{sim/person.py}     & Entidad Persona \\
+\texttt{sim/couple.py}     & Entidad Pareja \\
+\texttt{sim/simulator.py}  & Motor de simulación (bucle mensual) \\
+\texttt{main.py}           & Punto de entrada CLI \\
+\texttt{visualize.py}      & Gráficas con \texttt{matplotlib} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Diagrama de Flujo del Bucle Mensual}
+
+La Fig.~\ref{fig:flujo} muestra el orden de procesamiento dentro de cada
+mes de simulación.
+
+\begin{figure}[H]
+\centering
+% Sustituir por imagen generada si se dispone de ella
+\fbox{\parbox{0.85\textwidth}{%
+\centering
+\vspace{0.3cm}
+\textbf{Inicio del mes $t$}\\[4pt]
+$\downarrow$\\[2pt]
+Envejecer a todos (+1 mes)\\[2pt]
+$\downarrow$\\[2pt]
+Evaluar muertes (Bernoulli por persona)\\[2pt]
+$\downarrow$\\[2pt]
+Evaluar rupturas (Bernoulli por pareja)\\[2pt]
+$\downarrow$\\[2pt]
+Decrementar contadores de soledad\\[2pt]
+$\downarrow$\\[2pt]
+Intentar formación de parejas\\[2pt]
+$\downarrow$\\[2pt]
+Evaluar embarazos\\[2pt]
+$\downarrow$\\[2pt]
+Procesar nacimientos\\[2pt]
+$\downarrow$\\[2pt]
+\textbf{Fin del mes $t$} (registrar estadísticas si $t \bmod 12 = 0$)
+\vspace{0.3cm}
+}}
+\caption{Flujo de procesamiento en cada paso mensual.}
+\label{fig:flujo}
+\end{figure}
+
+\subsection{Complejidad Computacional}
+
+En cada mes el costo dominante es el emparejamiento, cuyo costo en el
+peor caso es $O(n_H \cdot n_M)$ donde $n_H$ y $n_M$ son el número de
+hombres y mujeres disponibles.
+Con el barajado secuencial descrito en S7, en la práctica el costo se
+aproxima a $O(\min(n_H, n_M))$ porque la mayoría de los intentos termina
+en la primera pareja compatible.
+Los demás eventos son $O(n)$ donde $n$ es la población total.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Experimentos y Resultados}
+\label{sec:experimentos}
+% ──────────────────────────────────────────────────────────────────────────
+
+\subsection{Configuración de los Experimentos}
+
+Se realizaron experimentos variando el tamaño de la población inicial.
+La Tabla~\ref{tab:experimentos} resume las configuraciones utilizadas.
+
+\begin{table}[H]
+\caption{Configuración de los experimentos realizados.}
+\label{tab:experimentos}
+\centering
+\begin{tabular}{ccccl}
+\toprule
+\textbf{Exp.} & \textbf{Mujeres} & \textbf{Hombres} & \textbf{Semilla} & \textbf{Propósito} \\
+\midrule
+E1 & 100  & 100  & 0  & Población pequeña, colapso rápido \\
+E2 & 500  & 500  & 42 & Población mediana, dinámica principal \\
+E3 & 1000 & 1000 & 7  & Población grande, mayor estabilidad \\
+E4 & 500  & 500  & 0  & Reproducibilidad con semilla distinta \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Análisis de los Resultados}
+
+La Tabla~\ref{tab:resultados} resume los indicadores clave de cada experimento.
+
+\begin{table}[H]
+\caption{Resultados de los experimentos de simulación.}
+\label{tab:resultados}
+\centering
+\begin{tabular}{ccccccc}
+\toprule
+\textbf{Exp.} & \textbf{$N_0$} & \textbf{Pico} & \textbf{Año pico} &
+\textbf{Extinción} & \textbf{Muertes año 1} & \textbf{Nacim.\ año 1} \\
+\midrule
+E1 &   200 &   165 & 1 & año 25 &  66 &  31 \\
+E2 & 1\,000 &   782 & 1 & año 47 & 356 & 138 \\
+E3 & 2\,000 & 1\,713 & 1 & año 41 & 648 & 361 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Los experimentos revelan una dinámica consistente:
+
+\begin{enumerate}
+  \item \textbf{Colapso en poblaciones pequeñas.}
+        Con 200 individuos iniciales (E1), la población se extingue alrededor
+        del año 25. Esto se debe a que la distribución de edades inicial
+        $U(0,100)$ coloca aproximadamente un 30\,\% de los individuos en el
+        rango 45--76 (mortalidad anual 30--35\,\%) y un 20\,\% en el rango
+        76--125 (mortalidad anual 65--70\,\%), generando una mortandad masiva
+        en los primeros años.
+
+  \item \textbf{Efecto de umbral poblacional.}
+        A partir de cierto tamaño inicial, la tasa de nacimientos compensa
+        las muertes y la población puede sostenerse durante más tiempo.
+        Con 1\,000 individuos (E3) la población sobrevive más años, aunque
+        también tiende a decrecer a largo plazo por el mismo efecto de
+        distribución de edades.
+
+  \item \textbf{Asimetría de sexos.}
+        Conforme pasan los años, el número de hombres supera al de mujeres
+        en casi todas las simulaciones. Esto es consecuencia de que las
+        mujeres tienen mayor probabilidad de mortalidad en algunos rangos
+        etarios (35\,\% frente a 30\,\% en 45--76) y de que el embarazo
+        no afecta la probabilidad de muerte en el modelo.
+
+  \item \textbf{Dinámica de parejas.}
+        El pico de parejas se alcanza en el año 1 (cuando la población es
+        máxima y el emparejador recorre la lista por primera vez) y decrece
+        monotónicamente junto con la población.
+\end{enumerate}
+
+\subsection{Gráficas}
+
+Las Figs.~\ref{fig:e1}--\ref{fig:e3} muestran los paneles de resultados
+generados por \texttt{visualize.py} para cada experimento.
+Cada panel contiene: población total, hombres vs.\ mujeres, nacimientos
+y muertes, dinámica de parejas, edad promedio, y distribución de edades
+al año final.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{figures/E1_100x100.png}
+  \caption{Experimento E1: 100 mujeres + 100 hombres, semilla 0.
+           La población se extingue alrededor del año~25.}
+  \label{fig:e1}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{figures/E2_500x500.png}
+  \caption{Experimento E2: 500 mujeres + 500 hombres, semilla 42.
+           Mayor tiempo de supervivencia pero igualmente decreciente.}
+  \label{fig:e2}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{figures/E3_1000x1000.png}
+  \caption{Experimento E3: 1000 mujeres + 1000 hombres, semilla 7.
+           La masa poblacional inicial retrasa el colapso varios años.}
+  \label{fig:e3}
+\end{figure}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Conclusiones}
+\label{sec:conclusiones}
+% ──────────────────────────────────────────────────────────────────────────
+
+Se ha implementado con éxito una simulación de eventos discretos de base
+mensual para modelar la evolución de una población durante 100~años.
+Las principales conclusiones son:
+
+\begin{enumerate}
+  \item El modelo es sensible al tamaño inicial de la población.
+        Con poblaciones pequeñas, el colapso es inevitable en pocas décadas.
+
+  \item La distribución de edades iniciales $U(0,100)$ es una condición
+        inicial muy desfavorable: una fracción significativa de los
+        individuos empieza ya en rangos de alta mortalidad.
+        Sería interesante comparar con una distribución más realista
+        (p.~ej., pirámide triangular con moda en 0).
+
+  \item Los supuestos sobre la frecuencia de evaluación de probabilidades
+        (mensual vs.\ anual) tienen un impacto directo en la velocidad de
+        colapso poblacional y deben documentarse explícitamente.
+
+  \item El modelo podría extenderse con migración, enfermedades o
+        variaciones estacionales de la fertilidad, sin cambios estructurales
+        en la arquitectura del simulador.
+\end{enumerate}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section*{Agradecimientos}
+
+Trabajo realizado en el marco de la asignatura de Simulación,
+Facultad de Matemática y Computación, Universidad de La Habana.
+
+% ──────────────────────────────────────────────────────────────────────────
+\begin{thebibliography}{9}
+
+\bibitem{axtell2000}
+Axtell, R., Epstein, J.M.: Agent-Based Modeling: Understanding Our Creations.
+Bulletin of the Santa Fe Institute \textbf{14}, 28--32 (2000)
+
+\bibitem{banks2001}
+Banks, J., Carson, J.S., Nelson, B.L., Nicol, D.M.:
+Discrete-Event System Simulation, 3rd edn.
+Prentice-Hall, Upper Saddle River (2001)
+
+\bibitem{kelton2015}
+Kelton, W.D., Smith, J.S., Sturrock, D.T.:
+Simio and Simulation: Modeling, Analysis, Applications, 3rd edn.
+McGraw-Hill, New York (2015)
+
+\bibitem{rubinstein2016}
+Rubinstein, R.Y., Kroese, D.P.:
+Simulation and the Monte Carlo Method, 3rd edn.
+Wiley, New York (2016)
+
+\bibitem{law2015}
+Law, A.M.:
+Simulation Modeling and Analysis, 5th edn.
+McGraw-Hill, New York (2015)
+
+\end{thebibliography}
+
+\end{document}
