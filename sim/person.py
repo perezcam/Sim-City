@@ -14,7 +14,7 @@ class Person:
         self.age_months: int = age_months
         self.alive: bool = True
 
-        self.partner_id: int | None = None
+        self.couple_id: int | None = None
         self.children_count: int = 0
         self.children_desired: int = self._sample_desired_children()
 
@@ -23,6 +23,11 @@ class Person:
 
         # > 0 means person cannot seek a new partner yet
         self.solitude_months_remaining: int = 0
+
+        # Parenthood (None for the founding generation)
+        self.father_id: int | None = None
+        self.mother_id: int | None = None
+        self.birth_year: int = 0
 
     @staticmethod
     def _sample_desired_children() -> int:
@@ -37,7 +42,7 @@ class Person:
 
     @property
     def is_single(self) -> bool:
-        return self.partner_id is None
+        return self.couple_id is None
 
     @property
     def is_available_for_partner(self) -> bool:
@@ -53,6 +58,15 @@ class Person:
         mean = tables.solitude_mean_months(self.age_years)
         duration = int(round(random_vars.exponential(mean)))
         self.solitude_months_remaining = max(1, duration)
-        self.partner_id = None
+        self.couple_id = None
         self.pregnant = False
         self.pregnancy_months_remaining = 0
+
+    def __repr__(self) -> str:
+        status = "vivo" if self.alive else "muerto"
+        pareja = f"pareja={self.couple_id}" if self.couple_id else "soltero"
+        return (
+            f"Person(id={self.id}, {self.sex}, "
+            f"{self.age_years:.1f}a, {status}, {pareja}, "
+            f"hijos={self.children_count}/{self.children_desired})"
+        )
