@@ -9,10 +9,23 @@ from sim import tables, random_vars
 
 
 class Simulator:
-    def __init__(self, n_women: int, n_men: int, years: int = 100, seed: int | None = None):
+    def __init__(
+        self,
+        n_women: int,
+        n_men: int,
+        years: int = 100,
+        seed: int | None = None,
+        death_mode: str = "monthly",
+    ):
+        """
+        death_mode:
+          'monthly' — prob anual convertida a mensual con 1-(1-p)^(1/12).
+          'annual'  — se evalúa una vez al año (mes 11 de cada año).
+        """
         if seed is not None:
             random.seed(seed)
 
+        self.death_mode = death_mode
         Person._next_id = 0
         Couple._next_id = 0
 
@@ -78,8 +91,14 @@ class Simulator:
     # ── Step 2: deaths ──────────────────────────────────────────────────────
 
     def _process_deaths(self) -> None:
+        is_year_end = (self.month + 1) % 12 == 0
         for p in list(self._alive()):
-            prob = tables.death_prob_monthly(p.age_years, p.sex)
+            if self.death_mode == "annual":
+                if not is_year_end:
+                    continue
+                prob = tables.death_prob_annual(p.age_years, p.sex)
+            else:
+                prob = tables.death_prob_monthly(p.age_years, p.sex)
             if random_vars.bernoulli(prob):
                 self._kill(p)
 
@@ -92,7 +111,7 @@ class Simulator:
             if couple:
                 partner = self.persons[couple.other(p.id)]
                 del self.couples[couple.id]
-                partner.partner_id = None
+                partner.couple_id = None
                 partner.enter_solitude()
 
     # ── Step 3: breakups ────────────────────────────────────────────────────
@@ -108,10 +127,10 @@ class Simulator:
         pb = self.persons.get(couple.person_b_id)
         del self.couples[couple.id]
         if pa and pa.alive:
-            pa.partner_id = None
+            pa.couple_id = None
             pa.enter_solitude()
         if pb and pb.alive:
-            pb.partner_id = None
+            pb.couple_id = None
             pb.enter_solitude()
         if not widowed:
             self._breakups_this_year += 1
@@ -158,8 +177,8 @@ class Simulator:
 
                 couple = Couple(man.id, woman.id)
                 self.couples[couple.id] = couple
-                man.partner_id = couple.id
-                woman.partner_id = couple.id
+                man.couple_id = couple.id
+                woman.couple_id = couple.id
 
                 paired_ids.add(man.id)
                 paired_ids.add(woman.id)
@@ -190,7 +209,7 @@ class Simulator:
             prob = tables.pregnancy_prob(woman.age_years)
             if random_vars.bernoulli(prob):
                 woman.pregnant = True
-                woman.pregnancy_months_remaining = 9
+                woman.pregnancy_months_remaining = tables.PREGNANCY_DURATION_MONTHS
 
     # ── Step 7: births ──────────────────────────────────────────────────────
 
@@ -210,9 +229,13 @@ class Simulator:
             if couple:
                 partner = self.persons.get(couple.other(woman.id))
 
+            birth_year = (self.month + 1) // 12
             for _ in range(n_babies):
                 sex = random_vars.random_sex()
                 baby = Person(sex, 0)
+                baby.mother_id = woman.id
+                baby.father_id = partner.id if partner else None
+                baby.birth_year = birth_year
                 self.persons[baby.id] = baby
                 self._births_this_year += 1
 
@@ -258,6 +281,6 @@ class Simulator:
         return (p for p in self.persons.values() if p.alive)
 
     def _couple_of(self, person: Person) -> Couple | None:
-        if person.partner_id is None:
+        if person.couple_id is None:
             return None
-        return self.couples.get(person.partner_id)
+        return self.couples.get(person.couple_id)

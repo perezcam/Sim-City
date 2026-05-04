@@ -16,3 +16,10 @@ class Couple:
     def other(self, person_id: int) -> int:
         """Return the partner's id given one member's id."""
         return self.person_b_id if person_id == self.person_a_id else self.person_a_id
+
+    def __repr__(self) -> str:
+        return (
+            f"Couple(id={self.id}, "
+            f"a={self.person_a_id}, b={self.person_b_id}, "
+            f"meses={self.months_together})"
+        )

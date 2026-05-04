@@ -1,7 +1,5 @@
 """Probability lookup tables from the problem statement."""
 
-import math
-
 # ── Death probabilities (annual) by age range and sex ──────────────────────
 _DEATH_MALE = [
     (12,   0.25),
@@ -136,3 +134,7 @@ for _w in _BIRTH_WEIGHTS:
 def birth_count_cdf() -> tuple[list[int], list[float]]:
     """Return (values, cdf) for sampling number of babies born."""
     return _BIRTH_VALUES, _BIRTH_CDF
+
+
+# ── Fixed constants ────────────────────────────────────────────────────────
+PREGNANCY_DURATION_MONTHS = 9
