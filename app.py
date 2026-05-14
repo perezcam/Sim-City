@@ -41,7 +41,7 @@ with st.sidebar:
     sim_mode = st.radio(
         "Motor de simulación",
         ["step", "calendar_strong"],
-        index=1,
+        index=0,
         help=(
             "step     → bucle mensual clásico por fases.\n"
             "calendar_strong → FEL fuerte por entidad (next-event)."
@@ -50,7 +50,7 @@ with st.sidebar:
     pregnancy_mode  = st.radio(
         "Probabilidad de embarazo",
         ["range", "annual", "monthly"],
-        index=1,
+        index=0,
         help=(
             "range   → prob. acumulada en el rango de edad (como mortalidad)\n"
             "annual  → tasa anual convertida a mensual\n"
