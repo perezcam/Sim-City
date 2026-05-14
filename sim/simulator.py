@@ -1,7 +1,6 @@
 """Monthly-step discrete-event population simulator."""
 
 from __future__ import annotations
-import random
 
 from sim.person import Person
 from sim.couple import Couple
@@ -16,16 +15,23 @@ class Simulator:
         years: int = 100,
         seed: int | None = None,
         death_mode: str = "monthly",
+        pregnancy_mode: str = "range",
     ):
         """
         death_mode:
-          'monthly' — prob anual convertida a mensual con 1-(1-p)^(1/12).
+          'monthly' — prob de rango convertida a mensual con 1-(1-p)^(1/d).
           'annual'  — se evalúa una vez al año (mes 11 de cada año).
+
+        pregnancy_mode:
+          'range'   — p es prob. acumulada en el rango de edad → mensual.
+          'annual'  — p es tasa anual → convertida a mensual.
+          'monthly' — p se usa directamente como probabilidad mensual.
         """
         if seed is not None:
-            random.seed(seed)
+            random_vars.seed(seed)
 
         self.death_mode = death_mode
+        self.pregnancy_mode = pregnancy_mode
         Person._next_id = 0
         Couple._next_id = 0
 
@@ -162,14 +168,14 @@ class Simulator:
         for man in available_men:
             if man.id in paired_ids:
                 continue
+            if not random_vars.bernoulli(tables.want_partner_prob(man.age_years)):
+                continue
             for woman in available_women:
                 if woman.id in paired_ids:
                     continue
 
                 age_diff = abs(man.age_years - woman.age_years)
 
-                if not random_vars.bernoulli(tables.want_partner_prob(man.age_years)):
-                    continue
                 if not random_vars.bernoulli(tables.want_partner_prob(woman.age_years)):
                     continue
                 if not random_vars.bernoulli(tables.partner_formation_prob(age_diff)):
@@ -206,7 +212,7 @@ class Simulator:
             if woman.children_count >= max_desired:
                 continue
 
-            prob = tables.pregnancy_prob(woman.age_years)
+            prob = tables.pregnancy_prob(woman.age_years, self.pregnancy_mode)
             if random_vars.bernoulli(prob):
                 woman.pregnant = True
                 woman.pregnancy_months_remaining = tables.PREGNANCY_DURATION_MONTHS

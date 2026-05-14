@@ -27,7 +27,36 @@ with st.sidebar:
     n_hombres   = st.slider("Hombres iniciales",  50, 2000, 300, step=50)
     años        = st.slider("Años a simular",      10, 100,   50, step=5)
     seed        = st.number_input("Semilla aleatoria", value=42, step=1)
-    death_mode  = st.radio("Modo de mortalidad", ["monthly", "annual"], index=0)
+    _death_label = st.radio(
+        "Evaluación de muertes",
+        ["Mensual (12 Bernoulli/año)", "Anual (1 Bernoulli/año)"],
+        index=0,
+        help=(
+            "La probabilidad siempre se deriva de la tabla acumulada por rango.\n"
+            "Solo cambia cuántas veces por año se lanza el dado por persona.\n"
+            "Ambas son equivalentes en esperanza matemática."
+        ),
+    )
+    death_mode = "monthly" if _death_label.startswith("Mensual") else "annual"
+    sim_mode = st.radio(
+        "Motor de simulación",
+        ["step", "calendar_strong"],
+        index=1,
+        help=(
+            "step     → bucle mensual clásico por fases.\n"
+            "calendar_strong → FEL fuerte por entidad (next-event)."
+        ),
+    )
+    pregnancy_mode  = st.radio(
+        "Probabilidad de embarazo",
+        ["range", "annual", "monthly"],
+        index=1,
+        help=(
+            "range   → prob. acumulada en el rango de edad (como mortalidad)\n"
+            "annual  → tasa anual convertida a mensual\n"
+            "monthly → valor de la tabla usado directamente cada mes"
+        ),
+    )
 
     st.divider()
     st.subheader("Monte Carlo")
@@ -41,25 +70,29 @@ with st.sidebar:
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def cached_single(n_women, n_men, years, seed, death_mode):
-    from sim.simulator import Simulator
-    sim = Simulator(n_women, n_men, years=years, seed=seed, death_mode=death_mode)
+def cached_single(n_women, n_men, years, seed, death_mode, pregnancy_mode, sim_mode):
+    from sim.factory import build_simulator
+    sim = build_simulator(mode=sim_mode, n_women=n_women, n_men=n_men, years=years, seed=seed,
+                          death_mode=death_mode, pregnancy_mode=pregnancy_mode)
     stats = sim.run()
     persons = sim.persons
     return stats, persons
 
 
 @st.cache_data(show_spinner=False)
-def cached_monte_carlo(n_women, n_men, n_runs, years, base_seed, death_mode):
+def cached_monte_carlo(n_women, n_men, n_runs, years, base_seed, death_mode, pregnancy_mode, sim_mode):
     from sim.monte_carlo import run_n
     return run_n(n_women, n_men, n_runs, years=years,
-                 base_seed=base_seed, death_mode=death_mode)
+                 base_seed=base_seed, death_mode=death_mode,
+                 pregnancy_mode=pregnancy_mode, sim_mode=sim_mode)
 
 
 @st.cache_data(show_spinner=False)
-def cached_sensitivity(n_runs, years, death_mode):
+def cached_sensitivity(n_runs, years, death_mode, pregnancy_mode, sim_mode):
     from sim.sensitivity import run_sensitivity
-    return run_sensitivity(n_runs=n_runs, years=years, death_mode=death_mode)
+    return run_sensitivity(n_runs=n_runs, years=years,
+                           death_mode=death_mode, pregnancy_mode=pregnancy_mode,
+                           sim_mode=sim_mode)
 
 
 def fig_to_bytes(fig) -> bytes:
@@ -95,7 +128,7 @@ with tab1:
     if st.button("▶ Simular", key="btn_single"):
         with st.spinner("Corriendo simulación…"):
             stats, persons = cached_single(
-                n_mujeres, n_hombres, años, int(seed), death_mode
+                n_mujeres, n_hombres, años, int(seed), death_mode, pregnancy_mode, sim_mode
             )
         st.session_state["stats_single"]   = stats
         st.session_state["persons_single"] = persons
@@ -190,7 +223,7 @@ with tab2:
     if st.button("▶ Correr Monte Carlo", key="btn_mc"):
         with st.spinner(f"Corriendo {n_runs} simulaciones…"):
             mc = cached_monte_carlo(
-                n_mujeres, n_hombres, n_runs, años, int(seed), death_mode
+                n_mujeres, n_hombres, n_runs, años, int(seed), death_mode, pregnancy_mode, sim_mode
             )
         st.session_state["mc"] = mc
 
@@ -200,10 +233,20 @@ with tab2:
         survived  = sum(1 for e in mc["extinction_year"] if e is None)
         ext_vals  = [e for e in mc["extinction_year"] if e is not None]
 
-        c1, c2, c3 = st.columns(3)
+        ci_lo, ci_hi = mc["ci_population"]
+        ext_ci       = mc["ci_extinction"]
+
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Tasa de supervivencia", f"{100*survived/n_runs:.0f}%")
         c2.metric("Extinción media",       f"año {sum(ext_vals)/len(ext_vals):.1f}" if ext_vals else "—")
         c3.metric("Población final media", f"{mc['population']['mean'][-1]:.1f}")
+        c4.metric("Réplicas mín. (5% err)", str(mc["min_reps"]))
+
+        st.caption(
+            f"IC 95% población final: **[{ci_lo:.1f}, {ci_hi:.1f}]**"
+            + (f"  ·  IC 95% extinción: **[{ext_ci[0]:.1f}, {ext_ci[1]:.1f}]**"
+               if ext_ci else "")
+        )
 
         from visualize import plot_monte_carlo
         years_mc = mc["years"]
@@ -260,7 +303,7 @@ with tab3:
     if st.button("▶ Generar árbol", key="btn_tree"):
         with st.spinner("Corriendo simulación y construyendo árbol…"):
             stats_t, persons_t = cached_single(
-                n_mujeres, n_hombres, años, int(seed), death_mode
+                n_mujeres, n_hombres, años, int(seed), death_mode, pregnancy_mode, sim_mode
             )
         st.session_state["persons_tree"] = persons_t
 
@@ -285,10 +328,9 @@ with tab3:
             st.warning("No se registraron nacimientos. Aumenta los años o la población inicial.")
         else:
             # Build figure
-            from sim.genealogy import generation_depths
+            from sim.genealogy import generation_depths, subtree_bfs
             if sub.number_of_nodes() > max_nodes:
-                nodes = list(sub.nodes)[:max_nodes]
-                sub   = sub.subgraph(nodes).copy()
+                sub = subtree_bfs(sub, max_nodes)
 
             depths    = generation_depths(sub)
             gen_members: dict = {}
