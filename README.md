@@ -1,143 +1,144 @@
-# Sim-City — Poblado en Evolución
+# Sim-City — Poblado en Evolucion
 
-> **Proyecto 6** — Simulación basada en Eventos Discretos  
-> Facultad de Matemática y Computación, Universidad de La Habana  
-> Camilo Humberto Pérez Fleita · Grupo C312 · Ciencia de la Computación
+Simulacion de eventos discretos con pasos mensuales para estudiar la evolucion
+poblacional durante 100 anos. El sistema modela mortalidad, formacion y ruptura
+de parejas, embarazos y nacimientos, y registra estadisticas agregadas por ano.
 
-Simulación de eventos discretos con pasos mensuales (1 200 iteraciones = 100 años)
-para estudiar la evolución demográfica de una población: mortalidad, formación de
-parejas, embarazos, nacimientos y árbol genealógico.
+## Estado actual del sistema
 
-🔗 **Repositorio:** https://github.com/perezcam/Sim-City
+La rama `main` contiene una implementacion CLI basada en:
 
----
+- `main.py`: punto de entrada y argumentos de ejecucion.
+- `sim/simulator.py`: motor mensual (7 fases por mes).
+- `sim/tables.py`: tablas de probabilidades del modelo.
+- `sim/random_vars.py`: utilidades de muestreo aleatorio.
+- `visualize.py`: generacion de graficas con Matplotlib.
 
-## Instalación
+No hay dashboard Streamlit activo en esta rama (`app.py` no forma parte del estado actual).
+
+## Requisitos
+
+- Python 3.10+
+- Dependencias de `requirements.txt`
+
+Instalacion:
 
 ```bash
-git clone https://github.com/perezcam/Sim-City.git
-cd Sim-City
 pip install -r requirements.txt
 ```
 
-**Dependencias:** `matplotlib >= 3.7` · `networkx >= 3.0` · `streamlit >= 1.30`
+## Uso
 
----
+Simulacion por defecto:
 
-## Modos de uso
-
-### Simulación única
 ```bash
-python3 main.py --mujeres 500 --hombres 500 --años 100 --seed 42
+python main.py
 ```
 
-### Simulación + exportar CSV y figura
+Simulacion personalizada:
+
 ```bash
-python3 main.py --mujeres 500 --hombres 500 --seed 42 --csv stats.csv --save-fig resultados.png
+python main.py --mujeres 500 --hombres 500 --años 100 --seed 42
 ```
 
-### Modo de mortalidad anual (alternativo)
+Guardar estadisticas en CSV:
+
 ```bash
-python3 main.py --mujeres 500 --hombres 500 --death-mode annual
+python main.py --mujeres 500 --hombres 500 --años 100 --seed 42 --csv e2_stats.csv
 ```
 
-### Motor FEL fuerte (next-event por entidad)
+Ejecutar sin graficas:
+
 ```bash
-python3 main.py --mujeres 500 --hombres 500 --sim-mode calendar_strong
+python main.py --mujeres 500 --hombres 500 --años 100 --seed 42 --no-plot
 ```
 
-### Monte Carlo (N corridas independientes)
-```bash
-python3 main.py --mujeres 500 --hombres 500 --runs 30
-```
+## Argumentos de `main.py`
 
-### Análisis de sensibilidad
-```bash
-python3 main.py --sensitivity
-```
+- `--mujeres` (int, default `500`)
+- `--hombres` (int, default `500`)
+- `--años` (int, default `100`)
+- `--seed` (int, default `None`)
+- `--csv` (str, opcional)
+- `--no-plot` (flag)
 
-### Árbol genealógico
-```bash
-python3 main.py --mujeres 300 --hombres 300 --años 50 --seed 42 --family-tree
-```
+## Funcionamiento del motor
 
-### Dashboard interactivo (Streamlit)
-```bash
-streamlit run app.py
-# Abrir http://localhost:8501
-```
+Cada mes de simulacion ejecuta:
 
-### Tests
-```bash
-python3 -m pytest tests/ -v
-```
-
----
-
-## Estructura del proyecto
-
-```
-Sim-City/
-├── sim/
-│   ├── tables.py        # Tablas de probabilidad del enunciado
-│   ├── random_vars.py   # Generadores de variables aleatorias (U, Bernoulli, Exp, CDF)
-│   ├── person.py        # Entidad Persona (edad, sexo, pareja, hijos, parentesco)
-│   ├── couple.py        # Entidad Pareja
-│   ├── simulator.py     # Motor de simulación — bucle mensual de 7 pasos
-│   ├── calendar_strong_simulator.py  # Motor FEL fuerte (next-event por entidad)
-│   ├── factory.py       # Selector/fábrica de motor (step/calendar_strong)
-│   ├── monte_carlo.py   # Runner de N corridas con agregación estadística
-│   ├── sensitivity.py   # Análisis de sensibilidad (tamaño inicial, distribución de edades)
-│   └── genealogy.py     # Árbol genealógico con networkx
-├── tests/
-│   ├── test_tables.py
-│   ├── test_random_vars.py
-│   └── test_simulator.py
-├── informe/
-│   ├── informe.tex      # Informe en formato LNCS
-│   └── figures/         # Figuras generadas por los experimentos
-├── app.py               # Dashboard Streamlit (3 pestañas)
-├── main.py              # CLI principal
-├── visualize.py         # Gráficas matplotlib
-└── requirements.txt
-```
-
----
-
-## Modelo de simulación
-
-| Aspecto | Decisión |
-|---|---|
-| Unidad de tiempo | Mes |
-| Horizonte | 100 años (1 200 pasos) |
-| Motor de ejecución | `step` o `calendar_strong` (FEL fuerte) |
-| Probabilidades de muerte | Anuales → mensuales: `1-(1-p)^(1/12)` |
-| Probabilidades de embarazo | Mensuales directas |
-| Ruptura | Prob. anual 0.2 → mensual: `1-(0.8)^(1/12)` |
-| Hijos deseados | Distribución empírica normalizada |
-| Duración embarazo | 9 meses fijos |
-| Emparejamiento | Barajar listas + iterar secuencialmente |
-| Soledad post-ruptura | Exponencial con media según edad |
-
-**Orden del bucle mensual:**
-1. Envejecer a todos (+1 mes)
+1. Envejecer personas (+1 mes)
 2. Evaluar muertes
 3. Evaluar rupturas
-4. Decrementar soledad
+4. Actualizar tiempo de soledad
 5. Formar parejas
 6. Evaluar embarazos
 7. Procesar nacimientos
 
----
+Cada 12 meses se registra un snapshot anual con:
 
-## Experimentos principales
+- `population`, `men`, `women`
+- `couples`, `single`
+- `births`, `deaths`
+- `couples_formed`, `breakups`
+- `age_groups` (`0-12`, `12-45`, `45-76`, `76+`)
+- `avg_age`
 
-| Experimento | Población inicial | Supervivencia 100 años |
-|---|---|---|
-| E1 | 200 (100M + 100H) | Extinción ~año 25 |
-| E2 | 1 000 (500M + 500H) | Extinción ~año 47 |
-| E3 | 2 000 (1000M + 1000H) | Extinción ~año 41 |
+## Experimentos realizados
 
-> La población tiende a decrecer porque la edad inicial U(0,100) coloca ~55% de los
-> individuos en rangos de alta mortalidad (45-76: 30-35%, 76+: 65-70%).
-> Con distribución U(0,40) la supervivencia mejora significativamente.
+Los experimentos base del proyecto variaron tamano inicial y semilla, con
+horizonte de 100 anos:
+
+- E1: 100 mujeres + 100 hombres, `seed=0`
+- E2: 500 mujeres + 500 hombres, `seed=42`
+- E3: 1000 mujeres + 1000 hombres, `seed=7`
+- E4: 500 mujeres + 500 hombres, `seed=0` (control de reproducibilidad)
+
+Resultados reportados para E1-E3 (escenario de referencia del informe):
+
+| Experimento | N inicial | Pico | Ano pico | Extincion | Nacidos | Muertos | Poblacion final |
+|---|---:|---:|---:|---|---:|---:|---:|
+| E1 | 200 | 209 | 6 | No en 100 anos | 151 | 243 | 108 |
+| E2 | 1000 | 1046 | 12 | No en 100 anos | 1361 | 1465 | 896 |
+| E3 | 2000 | 2079 | 11 | No en 100 anos | 2535 | 2803 | 1732 |
+
+Lecturas principales:
+
+- Hay una caida inicial fuerte por la distribucion de edades de arranque.
+- En el horizonte de 100 anos se observa descenso demografico lento, no colapso inmediato.
+- Los escenarios mayores (E3) amortiguan mejor la variabilidad relativa.
+
+Figuras asociadas en `informe/figures/`:
+
+- `E1_100x100.png`
+- `E2_500x500.png`
+- `E3_1000x1000.png`
+
+## Reproducir experimentos
+
+```bash
+python main.py --mujeres 100 --hombres 100 --años 100 --seed 0 --no-plot
+python main.py --mujeres 500 --hombres 500 --años 100 --seed 42 --no-plot
+python main.py --mujeres 1000 --hombres 1000 --años 100 --seed 7 --no-plot
+python main.py --mujeres 500 --hombres 500 --años 100 --seed 0 --no-plot
+```
+
+## Estructura del proyecto
+
+```text
+Sim-City/
+├── sim/
+│   ├── __init__.py
+│   ├── couple.py
+│   ├── person.py
+│   ├── random_vars.py
+│   ├── simulator.py
+│   └── tables.py
+├── informe/
+│   ├── README_informe.md
+│   ├── informe.tex
+│   └── figures/
+├── main.py
+├── visualize.py
+├── requirements.txt
+└── README.md
+```
