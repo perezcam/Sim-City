@@ -1,18 +1,17 @@
 """Probability lookup tables from the problem statement."""
 
-# ── Death probabilities (annual) by age range and sex ──────────────────────
-_DEATH_MALE = [
-    (12,   0.25),
-    (45,   0.10),
-    (76,   0.30),
-    (125,  0.70),
+# ── Death probabilities by age range and sex ───────────────────────────────
+# Each entry: (age_lo, age_hi, p_male, p_female)
+# p is the CUMULATIVE probability of dying at some point within the range,
+# not a per-year rate.  E.g. 0.25 for 0-12 means 25% of children die before
+# turning 12 (so 75% survive childhood).
+_DEATH_RANGES = [
+    (0,    12,  0.25, 0.25),
+    (12,   45,  0.10, 0.15),
+    (45,   76,  0.30, 0.35),
+    (76,  125,  0.70, 0.65),
 ]
-_DEATH_FEMALE = [
-    (12,   0.25),
-    (45,   0.15),
-    (76,   0.35),
-    (125,  0.65),
-]
+
 
 def _lookup(table: list, age: float) -> float:
     for upper, prob in table:
@@ -21,33 +20,63 @@ def _lookup(table: list, age: float) -> float:
     return table[-1][1]
 
 
-def death_prob_annual(age: float, sex: str) -> float:
-    """Annual probability of dying given age (years) and sex ('M'/'F')."""
-    table = _DEATH_MALE if sex == "M" else _DEATH_FEMALE
-    return _lookup(table, age)
+def _death_prob_monthly_for_range(lo: int, hi: int, p_range: float) -> float:
+    """Monthly hazard derived from a cumulative range probability."""
+    duration_months = (hi - lo) * 12
+    return 1.0 - (1.0 - p_range) ** (1.0 / duration_months)
 
 
 def death_prob_monthly(age: float, sex: str) -> float:
-    """Convert annual death probability to monthly equivalent."""
-    p_annual = death_prob_annual(age, sex)
-    return 1.0 - (1.0 - p_annual) ** (1.0 / 12.0)
+    """Monthly probability of dying given age (years) and sex ('M'/'F')."""
+    for lo, hi, pm, pf in _DEATH_RANGES:
+        if age < hi:
+            return _death_prob_monthly_for_range(lo, hi, pm if sex == "M" else pf)
+    lo, hi, pm, pf = _DEATH_RANGES[-1]
+    return _death_prob_monthly_for_range(lo, hi, pm if sex == "M" else pf)
 
 
-# ── Pregnancy probability (monthly, applied to women with partner) ──────────
-_PREGNANCY = [
-    (15,  0.20),
-    (21,  0.45),
-    (35,  0.80),
-    (45,  0.40),
-    (60,  0.20),
-    (125, 0.05),
+def death_prob_annual(age: float, sex: str) -> float:
+    """Annual probability of dying given age (years) and sex ('M'/'F')."""
+    p_monthly = death_prob_monthly(age, sex)
+    return 1.0 - (1.0 - p_monthly) ** 12
+
+
+# ── Pregnancy probability ──────────────────────────────────────────────────
+# Each entry: (age_lo, age_hi, p)
+# p interpretation depends on `mode` passed to pregnancy_prob():
+#   'monthly' — use p directly as monthly probability
+#   'annual'  — p is an annual rate; convert with 1-(1-p)^(1/12)
+#   'range'   — p is cumulative probability over the full age range;
+#               convert with 1-(1-p)^(1/duration_months)
+_PREGNANCY_RANGES = [
+    (12,  15,  0.20),
+    (15,  21,  0.45),
+    (21,  35,  0.80),
+    (35,  45,  0.40),
+    (45,  60,  0.20),
+    (60, 125,  0.05),
 ]
 
-def pregnancy_prob(age: float) -> float:
-    """Monthly probability of pregnancy given woman's age (years)."""
+
+def pregnancy_prob(age: float, mode: str = "range") -> float:
+    """Monthly probability of pregnancy given woman's age and interpretation mode."""
     if age < 12:
         return 0.0
-    return _lookup(_PREGNANCY, age)
+    for lo, hi, p in _PREGNANCY_RANGES:
+        if age < hi:
+            return _pregnancy_monthly(lo, hi, p, mode)
+    lo, hi, p = _PREGNANCY_RANGES[-1]
+    return _pregnancy_monthly(lo, hi, p, mode)
+
+
+def _pregnancy_monthly(lo: int, hi: int, p: float, mode: str) -> float:
+    if mode == "monthly":
+        return p
+    if mode == "annual":
+        return 1.0 - (1.0 - p) ** (1.0 / 12.0)
+    # "range": cumulative probability over the range
+    duration_months = (hi - lo) * 12
+    return 1.0 - (1.0 - p) ** (1.0 / duration_months)
 
 
 # ── Wanting a partner probability by age ───────────────────────────────────
