@@ -2,6 +2,7 @@
 
 import pytest
 from sim.simulator import Simulator
+from sim.factory import build_simulator
 
 
 def test_initial_population_count():
@@ -83,3 +84,65 @@ def test_annual_death_mode_slower_decline():
     avg_a = sum(deaths_annual)  / n_seeds
     # Con misma tasa anual efectiva, el promedio de muertes debe ser comparable (± 20%)
     assert abs(avg_m - avg_a) / max(avg_m, avg_a) < 0.20
+
+
+def test_calendar_mode_runs_and_matches_horizon():
+    years = 12
+    sim = build_simulator(
+        mode="calendar",
+        n_women=100,
+        n_men=100,
+        years=years,
+        seed=17,
+    )
+    stats = sim.run()
+    assert len(stats) == years
+
+
+def test_calendar_mode_reproducible_with_seed():
+    stats_a = build_simulator(
+        mode="calendar",
+        n_women=150,
+        n_men=150,
+        years=8,
+        seed=9,
+    ).run()
+    stats_b = build_simulator(
+        mode="calendar",
+        n_women=150,
+        n_men=150,
+        years=8,
+        seed=9,
+    ).run()
+    assert [s["population"] for s in stats_a] == [s["population"] for s in stats_b]
+
+
+def test_calendar_strong_mode_runs_and_matches_horizon():
+    years = 10
+    sim = build_simulator(
+        mode="calendar_strong",
+        n_women=80,
+        n_men=80,
+        years=years,
+        seed=21,
+    )
+    stats = sim.run()
+    assert len(stats) == years
+
+
+def test_calendar_strong_mode_reproducible_with_seed():
+    stats_a = build_simulator(
+        mode="calendar_strong",
+        n_women=120,
+        n_men=120,
+        years=6,
+        seed=11,
+    ).run()
+    stats_b = build_simulator(
+        mode="calendar_strong",
+        n_women=120,
+        n_men=120,
+        years=6,
+        seed=11,
+    ).run()
+    assert [s["population"] for s in stats_a] == [s["population"] for s in stats_b]

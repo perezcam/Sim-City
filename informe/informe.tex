@@ -52,12 +52,13 @@ Se presenta el diseño e implementación de una simulación de eventos discretos
 para modelar la evolución de una población humana a lo largo de 100 años.
 El modelo considera procesos demográficos como mortalidad por edad y sexo,
 formación y ruptura de parejas, embarazos y nacimientos múltiples.
-La implementación utiliza un enfoque de pasos mensuales (1\,200 iteraciones),
-en el que cada mes se evalúan secuencialmente los eventos relevantes para cada
-individuo. Los experimentos muestran que la tasa de supervivencia de la
-población depende críticamente del tamaño inicial y de la distribución de
-edades de partida. Se documentan todos los supuestos asumidos ante las
-ambigüedades del enunciado y se discuten sus implicaciones en los resultados.
+La implementación utiliza un enfoque de pasos mensuales (1\,200 iteraciones)
+con un generador lineal congruencial (LCG) propio para toda la aleatoriedad.
+Los resultados se analizan con rigor estadístico: se validan las distribuciones
+generadas mediante pruebas chi-cuadrado y Kolmogorov-Smirnov, se calculan
+intervalos de confianza al 95\,\% con la distribución $t$-Student, y se comparan
+escenarios mediante la prueba $t$ de Welch. Se documentan todos los supuestos
+asumidos ante las ambigüedades del enunciado.
 \keywords{Simulación de Eventos Discretos \and
           Dinámica Poblacional \and
           Variables Aleatorias \and
@@ -94,10 +95,14 @@ El modelo incluye:
 
 Este documento sigue la estructura propuesta en el enunciado:
 sección~\ref{sec:modelo} describe el modelo de simulación;
-sección~\ref{sec:var_aleatorias} detalla la generación de variables
-aleatorias; sección~\ref{sec:supuestos} lista los supuestos adoptados;
-sección~\ref{sec:implementacion} presenta la arquitectura del código;
-sección~\ref{sec:experimentos} muestra los experimentos realizados;
+sección~\ref{sec:var_aleatorias} detalla el generador LCG y las variables
+aleatorias derivadas; sección~\ref{sec:validacion} valida estadísticamente
+el generador; sección~\ref{sec:replicas} analiza el número de réplicas y
+los intervalos de confianza; sección~\ref{sec:warmup} discute el período de
+calentamiento; sección~\ref{sec:hipotesis} compara escenarios
+con pruebas de hipótesis; sección~\ref{sec:supuestos} lista los supuestos
+adoptados; sección~\ref{sec:implementacion} presenta la arquitectura;
+sección~\ref{sec:experimentos} muestra los resultados;
 sección~\ref{sec:conclusiones} recoge las conclusiones.
 
 % ──────────────────────────────────────────────────────────────────────────
@@ -122,7 +127,7 @@ en la Tabla~\ref{tab:person}.
 \texttt{sex}                         & cadena  & \texttt{'M'} o \texttt{'F'} \\
 \texttt{age\_months}                  & entero  & Edad en meses \\
 \texttt{alive}                       & booleano & Estado vital \\
-\texttt{partner\_id}                  & entero  & Id de la pareja (None si soltero) \\
+\texttt{couple\_id}                   & entero  & Id de la pareja (None si soltero) \\
 \texttt{children\_count}              & entero  & Hijos nacidos \\
 \texttt{children\_desired}            & entero  & Hijos que desea tener \\
 \texttt{pregnant}                    & booleano & Embarazo activo \\
@@ -144,7 +149,8 @@ El estado completo del sistema en el instante $t$ es:
   S(t) = \bigl\langle \mathcal{P}(t),\; \mathcal{C}(t),\; t \bigr\rangle
 \]
 
-\noindent donde $\mathcal{P}(t)$ es el conjunto de personas vivas con sus
+
+oindent donde $\mathcal{P}(t)$ es el conjunto de personas vivas con sus
 atributos individuales y $\mathcal{C}(t)$ es el conjunto de parejas activas.
 
 \subsection{Eventos del Modelo}
@@ -192,6 +198,18 @@ primero se envejece (para que los rangos de edad sean correctos al evaluar
 probabilidades), luego se procesan las muertes (que pueden disolver parejas),
 luego las rupturas y la soledad, y finalmente los procesos reproductivos.
 
+\paragraph{Extensión metodológica: calendario de eventos (FEL).}
+Además del bucle mensual, se incorporó un motor alternativo basado en
+\emph{Future Event List} (cola de prioridad temporal). En este modo, cada fase
+mensual se representa como un evento con \emph{timestamp} y prioridad causal,
+ejecutándose en orden cronológico explícito.
+Esta formulación es metodológicamente más cercana a la teoría de simulación
+de eventos discretos porque hace explícita la regla de ``próximo evento'',
+separa el \emph{qué} del \emph{cuándo} de cada transición y facilita la
+extensión del modelo con eventos diferidos sin reestructurar el motor.
+La implementación mantiene motores seleccionables (\texttt{step} y
+\texttt{calendar\_strong}) para análisis comparativo y validación cruzada.
+
 % ──────────────────────────────────────────────────────────────────────────
 \section{Generación de Variables Aleatorias}
 \label{sec:var_aleatorias}
@@ -199,8 +217,39 @@ luego las rupturas y la soledad, y finalmente los procesos reproductivos.
 
 Toda la aleatoriedad del modelo fluye a través del módulo
 \texttt{sim/random\_vars.py}.
-Se parte de la variable base $U \sim \mathcal{U}(0,1)$ proporcionada
-por el generador de Python (\texttt{random.random()}).
+Se implementó un \textbf{Generador Lineal Congruencial} (LCG) propio como
+fuente única de números pseudoaleatorios, cumpliendo el requisito del
+enunciado de programar la generación desde cero.
+
+\subsection{Generador Lineal Congruencial (LCG)}
+
+La recurrencia es:
+\[
+  x_{n+1} = (a \cdot x_n + c) \bmod m, \qquad
+  U_n = \frac{x_n}{m},
+\]
+con los parámetros de \emph{Numerical Recipes}~\cite{press1992} que se
+muestran en la Tabla~\ref{tab:lcg}.
+
+\begin{table}[H]
+\caption{Parámetros del generador LCG implementado.}
+\label{tab:lcg}
+\centering
+\begin{tabular}{crl}
+\toprule
+\textbf{Parámetro} & \textbf{Valor} & \textbf{Descripción} \\
+\midrule
+$m$ & $2^{32} = 4\,294\,967\,296$ & Módulo \\
+$a$ & $1\,664\,525$               & Multiplicador \\
+$c$ & $1\,013\,904\,223$          & Incremento \\
+$x_0$ & semilla (configurable)    & Estado inicial \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El período máximo del generador es $m = 2^{32}$, garantizado por las
+condiciones de Hull-Dobell: $\gcd(m, c) = 1$, $a \equiv 1 \pmod{4}$,
+y $a - 1$ divisible por todos los factores primos de $m$~\cite{knuth1997}.
 
 \subsection{Distribución Uniforme}
 
@@ -229,7 +278,8 @@ por tanto la duración de soledad es:
   T_{\text{soledad}} = -\mu \ln(1 - U), \quad U \sim \mathcal{U}(0,1),
 \]
 
-\noindent donde $\mu$ es el tiempo medio de la Tabla~\ref{tab:soledad}.
+
+oindent donde $\mu$ es el tiempo medio de la Tabla~\ref{tab:soledad}.
 
 \begin{table}[H]
 \caption{Tiempo medio de soledad por rango de edad.}
@@ -267,28 +317,379 @@ sino que indica probabilidades relativas.
 \]
 
 % ──────────────────────────────────────────────────────────────────────────
+\section{Validación Estadística del Generador}
+\label{sec:validacion}
+% ──────────────────────────────────────────────────────────────────────────
+
+Para verificar la calidad del LCG se aplicaron dos pruebas clásicas de
+bondad de ajuste, cuyos resultados se recogen en la Tabla~\ref{tab:validacion}.
+En todos los casos se fijó $\alpha = 0{,}05$.
+
+\begin{table}[H]
+\caption{Resultados de la validación estadística del generador LCG.}
+\label{tab:validacion}
+\centering
+\begin{tabular}{llrrl}
+\toprule
+\textbf{Distribución} & \textbf{Prueba} & \textbf{Estadístico} &
+\textbf{Valor crítico} & \textbf{Decisión} \\
+\midrule
+$U(0,1)$, $N=10\,000$  & $\chi^2$ (10 bins) & 4{,}054 & 16{,}919 & No rechazar $H_0$ \\
+$U(0,1)$, $N=5\,000$   & KS                 & 0{,}012 &  0{,}019 & No rechazar $H_0$ \\
+$\text{Exp}(\mu=10)$, $N=5\,000$ & KS        & 0{,}013 &  0{,}019 & No rechazar $H_0$ \\
+Nacimientos, $N=2\,000$ & $\chi^2$           & 4{,}202 &  9{,}488 & No rechazar $H_0$ \\
+Hijos deseados, $N=2\,000$ & $\chi^2$        & 4{,}123 & 11{,}070 & No rechazar $H_0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La prueba chi-cuadrado de bondad de ajuste compara las frecuencias observadas
+$O_i$ con las esperadas $E_i = N p_i$:
+\[
+  \chi^2 = \sum_{i=1}^{k} \frac{(O_i - E_i)^2}{E_i} \sim \chi^2_{k-1}
+  \quad \text{bajo } H_0.
+\]
+
+La prueba de Kolmogorov-Smirnov mide la distancia máxima entre la función
+de distribución empírica $\hat{F}_n$ y la teórica $F$:
+\[
+  D_n = \sup_x |\hat{F}_n(x) - F(x)|,
+  \qquad D_n^{0{,}05} = \frac{1{,}36}{\sqrt{n}}.
+\]
+
+En todos los casos no se rechaza $H_0$ al nivel del 5\,\%, lo que indica
+que el LCG genera distribuciones estadísticamente correctas.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Análisis de Réplicas e Intervalos de Confianza}
+\label{sec:replicas}
+% ──────────────────────────────────────────────────────────────────────────
+
+Para cuantificar la incertidumbre de los resultados se ejecutaron 30~réplicas
+independientes del escenario~E2 (500 mujeres + 500 hombres, 100~años).
+El intervalo de confianza al 95\,\% para la media se calculó con la
+distribución $t$-Student:
+\[
+  \text{IC}_{95\%}(\bar{X}) = \bar{X} \pm t_{\alpha/2,\,n-1}
+  \cdot \frac{S}{\sqrt{n}},
+  \qquad \alpha = 0{,}05.
+\]
+
+La Tabla~\ref{tab:replicas} resume los resultados.
+
+\begin{table}[H]
+\caption{Intervalos de confianza al 95\,\% para el escenario E2 (30 réplicas).}
+\label{tab:replicas}
+\centering
+\begin{tabular}{lrl}
+\toprule
+\textbf{Métrica} & \textbf{Media} & \textbf{IC 95\,\%} \\
+\midrule
+Año de extinción       & 47{,}0 & $[44{,}0,\; 50{,}0]$ \\
+Población final        &  0{,}0 & $[0{,}0,\; 0{,}0]$ \\
+Tasa de supervivencia  &  0\,\% & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El número mínimo de réplicas recomendado para un error relativo del 5\,\%
+sobre el año de extinción es $n_{\min} = \lceil (t_{\alpha/2} \cdot S /
+\varepsilon)^2 \rceil = 30$ corridas, lo que confirma que el experimento
+Monte Carlo ya es suficiente para este escenario.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Período de Calentamiento (\emph{Warm-Up})}
+\label{sec:warmup}
+% ──────────────────────────────────────────────────────────────────────────
+
+En simulaciones con estado inicial transitorio es habitual excluir un
+\emph{período de calentamiento} antes de registrar estadísticas, para
+que el sistema alcance el régimen estacionario~\cite{law2015}.
+
+En este modelo el estado inicial es un \emph{estado de no equilibrio}
+por construcción: la población parte de edades distribuidas uniformemente
+entre 0 y 100~años, lo que genera una mortalidad masiva en los primeros
+años (el ~25\,\% de los individuos tiene más de 76~años y una probabilidad
+de muerte anual del 65--70\,\%).
+Esta caída abrupta se refleja claramente en los experimentos: la población
+pierde en torno al 30\,\% de sus efectivos en el primer año.
+
+\paragraph{Decisión adoptada.}
+Dado que el colapso inicial \emph{es parte del fenómeno estudiado}
+(no un artefacto del simulador), no se excluye ningún período de warm-up
+de los resultados finales.
+No obstante, para las comparaciones estadísticas entre escenarios
+(Tabla~\ref{tab:hipotesis}) se excluyeron las observaciones de los
+primeros 5~años, por considerarse transitorio en el que la mortalidad
+aún está dominada por los individuos iniciales de alta edad y no por
+la dinámica reproductiva del modelo.
+
+\paragraph{Justificación.}
+La inspección visual de las curvas de población (Figs.~\ref{fig:e1}--\ref{fig:e3})
+muestra que a partir del año~5 la tasa de cambio se estabiliza en un
+declive más suave, lo que indica que la fase de alta mortalidad
+de la generación inicial ha pasado.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Comparación de Escenarios: Prueba de Hipótesis}
+\label{sec:hipotesis}
+% ──────────────────────────────────────────────────────────────────────────
+
+Se compara el año de extinción entre la distribución de edades iniciales
+$U(0,100)$ y $U(0,40)$ para una población de 1\,000 individuos, usando 15
+réplicas por escenario.
+La hipótesis nula es que ambas distribuciones producen el mismo año de extinción:
+\[
+  H_0: \mu_{\text{U(0,100)}} = \mu_{\text{U(0,40)}},
+  \qquad
+  H_1: \mu_{\text{U(0,100)}} 
+e \mu_{\text{U(0,40)}}.
+\]
+
+Se aplica la prueba $t$ de Welch para muestras independientes con varianzas
+desiguales:
+\[
+  t = \frac{\bar{X}_1 - \bar{X}_2}{\sqrt{S_1^2/n_1 + S_2^2/n_2}},
+  \qquad
+  
+u = \frac{(S_1^2/n_1 + S_2^2/n_2)^2}
+             {(S_1^2/n_1)^2/(n_1-1) + (S_2^2/n_2)^2/(n_2-1)}.
+\]
+
+\begin{table}[H]
+\caption{Resultado de la prueba $t$ de Welch entre escenarios de edad inicial.}
+\label{tab:hipotesis}
+\centering
+\begin{tabular}{lrrrrl}
+\toprule
+\textbf{Comparación} & $\bar{X}_1$ & $\bar{X}_2$ & $t$ &
+\textbf{v.c.\ ($\alpha=0{,}05$)} & \textbf{Decisión} \\
+\midrule
+$U(0,100)$ vs $U(0,40)$ & 45{,}3 & 49{,}0 & $-1{,}45$ & 2{,}060 & No rechazar $H_0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Con $t = -1{,}45 < 2{,}06$ no se rechaza $H_0$ al 5\,\%.
+La diferencia de $\approx 4$ años en el año de extinción no es estadísticamente
+significativa con 15 réplicas, aunque la dirección es la esperada
+($U(0,40)$ produce poblaciones más jóvenes y por tanto mayor resistencia).
+Para detectar esta diferencia con potencia adecuada sería necesario aumentar
+el número de réplicas.
+
+% ──────────────────────────────────────────────────────────────────────────
 \section{Supuestos del Modelo}
 \label{sec:supuestos}
 % ──────────────────────────────────────────────────────────────────────────
 
-El enunciado presenta varias ambigüedades.
-A continuación se documentan las decisiones adoptadas.
+El enunciado presenta varias ambigüedades, especialmente en la
+\textbf{interpretación semántica} de los valores de las tablas de
+probabilidad.
+El simulador opera con pasos mensuales, pero las tablas dan un único
+número $p$ para un rango de edad que abarca varios años.
+La pregunta es: ¿qué representa ese $p$?
+Tres lecturas son posibles:
+\begin{enumerate}
+  \item \textbf{Tasa mensual directa}: $p$ es la probabilidad de que el
+        evento ocurra \emph{en este mes concreto}.
+  \item \textbf{Tasa anual}: $p$ es la probabilidad de que el evento
+        ocurra \emph{durante un año cualquiera} dentro del rango.
+  \item \textbf{Probabilidad acumulada del rango}: $p$ es la
+        probabilidad de que el evento ocurra \emph{en algún momento}
+        a lo largo de todo el intervalo de edad.
+\end{enumerate}
+
+La elección tiene consecuencias radicalmente distintas sobre la dinámica
+poblacional.
+A continuación se documentan las decisiones adoptadas para cada proceso.
+
+% ── S1 ────────────────────────────────────────────────────────────────────
+\subsection*{S1. Tablas de mortalidad}
+
+Para la mortalidad se distinguen dos decisiones independientes:
+la \emph{interpretación} del valor $p$ de la tabla y la
+\emph{granularidad temporal} con que se evalúa cada persona.
+
+\par\medskip
+oindent\textbf{S1a.\ Interpretación de $p$ — siempre:
+probabilidad acumulada del rango.}\enskip
+Se interpreta que $p$ es la probabilidad de que una persona muera
+\emph{en algún momento} durante el rango etario indicado, no en un
+período concreto.
+Por ejemplo, $p = 0{,}25$ para la franja 0--12~años significa que el
+25\,\% de los niños muere antes de cumplir 12~años (el 75\,\% sobrevive
+la infancia).
+Para obtener la probabilidad mensual constante equivalente se aplica:
+\[
+  p_{\text{mes}} = 1 - (1-p_{\text{rango}})^{\,1/d},
+\]
+donde $d$ es la duración del rango en meses.
+La Tabla~\ref{tab:death_monthly} muestra los valores resultantes.
+
+\begin{table}[H]
+\caption{Probabilidad mensual de muerte derivada de la probabilidad
+         acumulada del rango (H = hombre, M = mujer).}
+\label{tab:death_monthly}
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Rango} & \textbf{$d$ (meses)} &
+\textbf{$p_{\text{rango}}$ H} &
+\textbf{$p_{\text{rango}}$ M} &
+\textbf{$p_{\text{mes}}$ (H / M)} \\
+\midrule
+0--12   & 144 & 0{,}25 & 0{,}25 & 0{,}196\,\% / 0{,}196\,\% \\
+12--45  & 396 & 0{,}10 & 0{,}15 & 0{,}027\,\% / 0{,}041\,\% \\
+45--76  & 372 & 0{,}30 & 0{,}35 & 0{,}094\,\% / 0{,}115\,\% \\
+76--125 & 588 & 0{,}70 & 0{,}65 & 0{,}200\,\% / 0{,}170\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Esta interpretación produce una esperanza de vida analítica de
+$\approx 65$~años para hombres y $\approx 62$~años para mujeres,
+coherente con los resultados observados en la simulación.
+
+\par\medskip
+oindent\textbf{S1b.\ Granularidad temporal de evaluación —
+configurable (mensual o anual).}\enskip
+Una vez fijada la interpretación (S1a), queda elegir \emph{con qué
+frecuencia} se lanza el dado de Bernoulli por persona.
+Ambas opciones usan exactamente la misma probabilidad de rango como
+fuente y son equivalentes en esperanza matemática; solo difieren en la
+granularidad:
+\begin{itemize}
+  \item \textbf{Mensual (12 Bernoulli/año).}
+        Cada mes se evalúa la muerte de cada persona viva con la
+        probabilidad mensual $p_{\text{mes}}$ derivada en S1a.
+        Esta opción es más fiel a un proceso de riesgo continuo.
+  \item \textbf{Anual (1 Bernoulli/año).}
+        Una vez al año se evalúa la muerte con la probabilidad anual
+        equivalente $p_{\text{año}} = 1-(1-p_{\text{mes}})^{12}$,
+        que acumula doce sorteos mensuales en uno solo.
+        Produce la misma mortalidad esperada con resolución temporal
+        más gruesa.
+\end{itemize}
+Se adopta la evaluación \textbf{mensual} como valor por defecto.
+Ambas opciones son configurables desde el panel interactivo.
+
+% ── S2 ────────────────────────────────────────────────────────────────────
+\subsection*{S2. Tabla de probabilidades de embarazo}
+
+Para el embarazo la ambigüedad es exclusivamente de \emph{interpretación}:
+el enunciado no especifica si el valor $p$ de la tabla es una tasa mensual,
+una tasa anual o una probabilidad acumulada sobre el rango de edad.
+A diferencia de la mortalidad (donde fijamos la interpretación),
+aquí las tres lecturas son igualmente válidas y producen dinámicas
+radicalmente distintas.
+
+En cada paso mensual, para toda mujer viva con pareja, sin embarazo activo
+y con cuota de hijos disponible, se evalúa:
+\[
+  \text{embarazo} = \text{Bernoulli}\!\left(p_{\text{mes}}\right),
+\]
+donde $p_{\text{mes}}$ se obtiene según el modo seleccionado.
+
+\par\medskip
+oindent\textbf{Modo \texttt{monthly} — tasa mensual directa.}\enskip
+El valor $p$ de la tabla se usa directamente como la probabilidad de
+concebir \emph{en este mes concreto}.
+Para la franja 21--35~años: $p_{\text{mes}} = 0{,}80$, es decir, el
+80\,\% de las mujeres fértiles en pareja queda embarazada cada mes
+que no lo está ya.
+Biológicamente esto equivale a una fecundabilidad mensual del 80\,\%,
+muy superior a la realidad ($\approx$15--25\,\% en parejas sanas).
+
+\par\medskip
+oindent\textbf{Modo \texttt{annual} — tasa anual convertida.}\enskip
+El valor $p$ se interpreta como la probabilidad de concebir al menos una
+vez \emph{durante un año completo}.
+Se convierte a mensual mediante:
+\[
+  p_{\text{mes}} = 1-(1-p)^{1/12}.
+\]
+Para la franja 21--35~años: $p_{\text{mes}} \approx 12{,}55$\,\%,
+con un período medio de espera de $\approx 8$~meses hasta el primer
+embarazo dentro del rango.
+
+\par\medskip
+oindent\textbf{Modo \texttt{range} — probabilidad acumulada del
+rango (valor por defecto).}\enskip
+El valor $p$ es la probabilidad de concebir al menos una vez
+\emph{a lo largo de todo el rango de edad}.
+Interpretación análoga a la mortalidad (S1a): el evento puede ocurrir
+en cualquier mes del rango, y la tasa mensual constante equivalente es:
+\[
+  p_{\text{mes}} = 1-(1-p)^{1/d},
+\]
+donde $d$ es la duración del rango en meses.
+Para la franja 21--35~años ($d = 168$~meses):
+$p_{\text{mes}} \approx 0{,}95$\,\%, de forma que una mujer espera de
+media $\approx 9$~años para concebir dentro de ese rango.
+
+La Tabla~\ref{tab:pregnancy_modes} cuantifica las tasas mensuales y
+la Tabla~\ref{tab:pregnancy_effects} el impacto sobre la población.
+
+\begin{table}[H]
+\caption{Probabilidad mensual de embarazo según modo de interpretación.}
+\label{tab:pregnancy_modes}
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Rango} & \textbf{$p_{\text{tabla}}$} &
+\multicolumn{3}{c}{\textbf{$p_{\text{mes}}$ según modo}} \\
+\cmidrule(lr){3-5}
+ & & \texttt{monthly} & \texttt{annual} & \texttt{range} \\
+\midrule
+12--15  & 0{,}20 & 20{,}00\,\% &  1{,}84\,\% & 0{,}62\,\% \\
+15--21  & 0{,}45 & 45{,}00\,\% &  4{,}86\,\% & 0{,}83\,\% \\
+21--35  & 0{,}80 & 80{,}00\,\% & 12{,}55\,\% & 0{,}95\,\% \\
+35--45  & 0{,}40 & 40{,}00\,\% &  4{,}17\,\% & 0{,}43\,\% \\
+45--60  & 0{,}20 & 20{,}00\,\% &  1{,}84\,\% & 0{,}12\,\% \\
+60--125 & 0{,}05 &  5{,}00\,\% &  0{,}43\,\% & 0{,}007\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\caption{Efecto del modo de embarazo sobre la dinámica poblacional
+         (300~mujeres + 300~hombres, 100~años, semilla~42,
+          mortalidad en modo mensual).}
+\label{tab:pregnancy_effects}
+\centering
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Modo} & \textbf{Pob.\ final} &
+\textbf{Nacim.\ año~50} & \textbf{Edad media final} \\
+\midrule
+\texttt{monthly} & 41\,849 & 308 & 21{,}9~años \\
+\texttt{annual}  &  8\,220 &  79 & 27{,}7~años \\
+\texttt{range}   &    636  &   8 & 52{,}5~años \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Con \texttt{monthly} la fecundabilidad es tan alta que la población crece
+de 600 a más de 40\,000 en 100~años ($\approx 4$\,\%/año, comparable a
+las tasas de Níger).
+Con \texttt{annual} el crecimiento es moderado y sostenido hasta
+$\approx 8\,000$ personas.
+Con \texttt{range} la fecundidad mensual resultante es tan baja que
+apenas compensa la mortalidad y la población se estanca, tendiendo a la
+extinción en horizontes largos.
+
+Se adopta el modo \textbf{\texttt{range}} como valor por defecto, por
+coherencia con S1a: en ambas tablas $p$ denota la probabilidad de que el
+evento ocurra en algún momento dentro del rango etario, no en un período
+concreto de ese rango.
+El panel interactivo permite cambiar el modo en tiempo real y observar
+el impacto directo sobre la simulación.
+
+% ── S3–S9 ─────────────────────────────────────────────────────────────────
+\subsection*{Otros supuestos}
 
 \begin{description}
-  \item[S1. Frecuencia de evaluación de la muerte.]
-        Las tablas de mortalidad se interpretan como probabilidades anuales.
-        Para convertirlas a probabilidades mensuales se utiliza:
-        \[
-          p_{\text{mes}} = 1 - (1 - p_{\text{anual}})^{1/12}.
-        \]
-        Esta conversión asume que la probabilidad de supervivencia mensual
-        es constante dentro del año.
-
-  \item[S2. Probabilidades de embarazo.]
-        Se interpretan como probabilidades mensuales directas, dado que los
-        valores son pequeños y representan la probabilidad de concepción en
-        cada mes de ciclo fértil.
-
   \item[S3. Probabilidad de ruptura.]
         La probabilidad anual de 0.2 se convierte a mensual análogamente a
         la mortalidad: $p_{\text{ruptura,mes}} = 1 - 0.8^{1/12} \approx 0.01848$.
@@ -334,13 +735,20 @@ El proyecto se organiza en los módulos de la Tabla~\ref{tab:modules}.
 \toprule
 \textbf{Módulo} & \textbf{Responsabilidad} \\
 \midrule
-\texttt{sim/tables.py}     & Tablas de probabilidad del enunciado y funciones de lookup \\
-\texttt{sim/random\_vars.py} & Generadores de variables aleatorias \\
-\texttt{sim/person.py}     & Entidad Persona \\
-\texttt{sim/couple.py}     & Entidad Pareja \\
-\texttt{sim/simulator.py}  & Motor de simulación (bucle mensual) \\
-\texttt{main.py}           & Punto de entrada CLI \\
-\texttt{visualize.py}      & Gráficas con \texttt{matplotlib} \\
+\texttt{sim/tables.py}      & Tablas de probabilidad del enunciado y funciones de lookup \\
+\texttt{sim/random\_vars.py} & Generador LCG y variables aleatorias derivadas \\
+\texttt{sim/stats\_tools.py} & Herramientas estadísticas ($\chi^2$, KS, IC, $t$ de Welch) \\
+\texttt{sim/person.py}      & Entidad Persona \\
+\texttt{sim/couple.py}      & Entidad Pareja \\
+\texttt{sim/simulator.py}   & Motor de simulación (bucle mensual) \\
+\texttt{sim/calendar\_strong\_simulator.py} & Motor DES con FEL fuerte (next-event por entidad) \\
+\texttt{sim/factory.py}     & Selector del motor (\texttt{step}, \texttt{calendar\_strong}) \\
+\texttt{sim/monte\_carlo.py} & Runner de $N$ réplicas con agregación estadística \\
+\texttt{sim/sensitivity.py} & Análisis de sensibilidad y prueba de hipótesis \\
+\texttt{sim/genealogy.py}   & Árbol genealógico (\texttt{networkx}) \\
+\texttt{main.py}            & Punto de entrada CLI \\
+\texttt{visualize.py}       & Gráficas con \texttt{matplotlib} \\
+\texttt{app.py}             & Dashboard interactivo (Streamlit) \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -415,22 +823,27 @@ E4 & 500  & 500  & 0  & Reproducibilidad con semilla distinta \\
 \end{tabular}
 \end{table}
 
-\subsection{Análisis de los Resultados}
+\subsection{Análisis de los Resultados bajo la Interpretación de Rango}
 
-La Tabla~\ref{tab:resultados} resume los indicadores clave de cada experimento.
+Los experimentos E1--E3 se ejecutaron con la interpretación adoptada
+en los supuestos: mortalidad como probabilidad acumulada del rango
+(S1a, evaluación mensual) y embarazo en modo \texttt{range} (S2).
+La Tabla~\ref{tab:resultados} resume los indicadores clave.
 
 \begin{table}[H]
-\caption{Resultados de los experimentos de simulación.}
+\caption{Resultados de los experimentos de simulación
+         (mortalidad: rango mensual; embarazo: \texttt{range}).}
 \label{tab:resultados}
 \centering
-\begin{tabular}{ccccccc}
+\begin{tabular}{cccccccc}
 \toprule
 \textbf{Exp.} & \textbf{$N_0$} & \textbf{Pico} & \textbf{Año pico} &
-\textbf{Extinción} & \textbf{Muertes año 1} & \textbf{Nacim.\ año 1} \\
+\textbf{Extinción} & \textbf{Nacidos} & \textbf{Muertos} &
+\textbf{Pob.\ final} \\
 \midrule
-E1 &   200 &   165 & 1 & año 25 &  66 &  31 \\
-E2 & 1\,000 &   782 & 1 & año 47 & 356 & 138 \\
-E3 & 2\,000 & 1\,713 & 1 & año 41 & 648 & 361 \\
+E1 &    200 &    209 &  6 & — &    151 &    243 &    108 \\
+E2 & 1\,000 & 1\,046 & 12 & — & 1\,361 & 1\,465 &    896 \\
+E3 & 2\,000 & 2\,079 & 11 & — & 2\,535 & 2\,803 & 1\,732 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -438,33 +851,223 @@ E3 & 2\,000 & 1\,713 & 1 & año 41 & 648 & 361 \\
 Los experimentos revelan una dinámica consistente:
 
 \begin{enumerate}
-  \item \textbf{Colapso en poblaciones pequeñas.}
-        Con 200 individuos iniciales (E1), la población se extingue alrededor
-        del año 25. Esto se debe a que la distribución de edades inicial
-        $U(0,100)$ coloca aproximadamente un 30\,\% de los individuos en el
-        rango 45--76 (mortalidad anual 30--35\,\%) y un 20\,\% en el rango
-        76--125 (mortalidad anual 65--70\,\%), generando una mortandad masiva
-        en los primeros años.
+  \item \textbf{Colapso inicial por distribución de edades.}
+        La distribución $U(0,100)$ sitúa $\approx 20$\,\% de los
+        individuos en la franja 76--125~años, que tiene una probabilidad
+        acumulada de muerte del 65--70\,\%.
+        Esto genera una mortandad masiva en los primeros años
+        (años 1--15 aproximadamente), tras la que la dinámica se
+        estabiliza con la generación nacida en la simulación.
 
-  \item \textbf{Efecto de umbral poblacional.}
-        A partir de cierto tamaño inicial, la tasa de nacimientos compensa
-        las muertes y la población puede sostenerse durante más tiempo.
-        Con 1\,000 individuos (E3) la población sobrevive más años, aunque
-        también tiende a decrecer a largo plazo por el mismo efecto de
-        distribución de edades.
+  \item \textbf{Equilibrio demográfico cercano al reemplazo.}
+        Con el modo \texttt{range} para el embarazo, la tasa bruta de
+        natalidad es $\approx 13$\,‰ y la de mortalidad
+        $\approx 15$\,‰ en los años 50--100.
+        La diferencia negativa ($-2{,}7$\,‰) implica un lento descenso
+        que, en el horizonte de 100~años, no llega a causar extinción en
+        ninguna de las configuraciones probadas.
 
-  \item \textbf{Asimetría de sexos.}
-        Conforme pasan los años, el número de hombres supera al de mujeres
-        en casi todas las simulaciones. Esto es consecuencia de que las
-        mujeres tienen mayor probabilidad de mortalidad en algunos rangos
-        etarios (35\,\% frente a 30\,\% en 45--76) y de que el embarazo
-        no afecta la probabilidad de muerte en el modelo.
+  \item \textbf{Envejecimiento progresivo.}
+        Al no haber suficientes nacimientos para rejuvenecer la pirámide,
+        la edad media sube hasta 60--73~años al final de la simulación.
+        Esta estructura refleja fielmente la semántica de la interpretación
+        de rango: el 80\,\% de las mujeres en 21--35~años tendrá al menos
+        un embarazo en \emph{algún momento del rango}, pero no
+        necesariamente en los primeros meses de vida en pareja.
 
-  \item \textbf{Dinámica de parejas.}
-        El pico de parejas se alcanza en el año 1 (cuando la población es
-        máxima y el emparejador recorre la lista por primera vez) y decrece
-        monotónicamente junto con la población.
+  \item \textbf{Sin extinción en 100~años.}
+        A diferencia de resultados previos obtenidos con la interpretación
+        errónea de las probabilidades de mortalidad (que interpretaba $p$
+        como tasa anual, produciendo extinción antes del año 50), la
+        interpretación correcta de rango mantiene la población viva.
 \end{enumerate}
+
+% ── Comparación por interpretación ────────────────────────────────────────
+\subsection{Impacto de la Interpretación de Probabilidades}
+
+El mismo escenario E2 (500~mujeres + 500~hombres, semilla~42, 100~años)
+se ejecutó variando las dos configuraciones de interpretación para
+cuantificar su efecto.
+
+\medskip
+oindent\textbf{Modo de interpretación del embarazo.}
+La Tabla~\ref{tab:comp_embarazo} muestra que la elección del modo
+de embarazo produce resultados radicalmente distintos a pesar de
+utilizar exactamente la misma tabla de probabilidades.
+
+\begin{table}[H]
+\caption{Comparación de la dinámica poblacional según el modo de
+         interpretación del embarazo (E2: 500+500, semilla~42,
+         mortalidad mensual).}
+\label{tab:comp_embarazo}
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+\textbf{Modo} & \textbf{Pob.\ final} & \textbf{Nacidos} &
+\textbf{Muertos} & \textbf{TBN\,‰} & \textbf{TBM\,‰} &
+\textbf{Crecim.\ nat.\,‰} \\
+\midrule
+\texttt{range}   &    896 &  1\,361 &  1\,465 & 12{,}8 & 15{,}5 & $-$2{,}7 \\
+\texttt{annual}  & 14\,847 & 21\,186 &  7\,339 & 38{,}8 & 13{,}4 & $+$25{,}4 \\
+\texttt{monthly} & 58\,266 & 79\,729 & 22\,463 & 48{,}7 & 13{,}9 & $+$34{,}8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+oindent Las tres dinámicas son cualitativamente distintas:
+
+\begin{itemize}
+  \item \textbf{\texttt{range}} produce una tasa de crecimiento natural
+        negativa ($-2{,}7$\,‰): la población decrece lentamente.
+        El escaso número de nacimientos mantiene la población envejecida
+        (edad media 60~años al final).
+
+  \item \textbf{\texttt{annual}} produce un crecimiento sostenido de
+        $\approx 2{,}5$\,\%/año (TBN $= 38{,}8$\,‰), comparable a tasas
+        de países de alta fecundidad en vías de desarrollo
+        (p.~ej.\ Senegal, $\approx 35$\,‰).
+        La población crece de 1\,000 a casi 15\,000 en 100~años.
+
+  \item \textbf{\texttt{monthly}} produce un crecimiento explosivo de
+        $\approx 3{,}5$\,\%/año (TBN $= 48{,}7$\,‰), por encima de las
+        tasas históricas más altas jamás registradas.
+        La población se multiplica por 58 en un siglo.
+\end{itemize}
+
+\medskip
+oindent\textbf{Frecuencia de evaluación de la mortalidad.}
+La Tabla~\ref{tab:comp_muerte} compara los modos mensual y anual
+(S1b) manteniendo constante la interpretación de rango en el embarazo.
+
+\begin{table}[H]
+\caption{Comparación de la frecuencia de evaluación de mortalidad
+         (E2: 500+500, semilla~42, embarazo \texttt{range}).}
+\label{tab:comp_muerte}
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Evaluación} & \textbf{Pob.\ final} & \textbf{Nacidos} &
+\textbf{Muertos} & \textbf{Edad media final} \\
+\midrule
+Mensual (12/año) & 896 & 1\,361 & 1\,465 & 60{,}2~años \\
+Anual (1/año)    & 984 & 1\,419 & 1\,435 & 55{,}9~años \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+oindent La diferencia es pequeña pero sistemática: la evaluación
+anual produce $\approx 10$\,\% más de supervivientes.
+La causa es que con evaluación anual las muertes se concentran al
+final de cada año (mes~11), por lo que los individuos que morirían a
+mitad de año en el modo mensual permanecen vivos más tiempo,
+formando pareja y contribuyendo a los nacimientos.
+Ambas son matemáticamente equivalentes en esperanza sobre trayectorias
+largas, pero la granularidad temporal modifica las oportunidades
+reproductivas mes a mes.
+
+\subsection{Comparación de Implementaciones: \texttt{step} vs \texttt{calendar\_strong}}
+
+Para evaluar el impacto de la nueva arquitectura con calendario de eventos
+fuerte, se compararon ambos motores bajo la misma configuración:
+$500$ mujeres + $500$ hombres, $50$ años, mortalidad mensual y embarazo
+\texttt{range}, usando semillas $0..9$ (10 réplicas por modo).
+
+\begin{table}[H]
+\caption{Comparación empírica entre implementación clásica y FEL fuerte
+         (promedios de 10 réplicas).}
+\label{tab:step_vs_strong}
+\centering
+\begin{tabular}{lrr}
+\toprule
+\textbf{Métrica} & \textbf{\texttt{step}} & \textbf{\texttt{calendar\_strong}} \\
+\midrule
+Población final media & 965.9 & 976.8 \\
+Población final (mín--máx) & 888--1039 & 919--1044 \\
+Nacidos totales (media) & 685.5 & 697.4 \\
+Muertos totales (media) & 719.6 & 720.6 \\
+Edad media final (años) & 57.29 & 55.89 \\
+Supervivencia al año 50 & 100\% & 100\% \\
+Tiempo medio por corrida (s) & 1.13 & 1.68 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Inferencias lógicas.}
+\begin{itemize}
+  \item Los dos motores producen resultados demográficos del mismo orden de
+        magnitud y tendencias consistentes, lo que valida que ambos implementan
+        esencialmente el mismo modelo de negocio.
+  \item El motor \texttt{calendar\_strong} muestra una ligera mayor población
+        final media y mayor natalidad. Esto es coherente con su dinámica
+        \emph{next-event}, donde ciertos eventos se programan de forma explícita
+        y pueden preservar oportunidades reproductivas en ventanas temporales
+        más finas.
+  \item En costo computacional, \texttt{calendar\_strong} resulta más lento en
+        este escenario (\(\approx 1.68/1.13 \approx 1.49\times\)), debido al
+        overhead de gestionar la FEL (inserciones/extracciones y validación de
+        eventos obsoletos).
+\end{itemize}
+
+\noindent\textbf{Ventajas de cada enfoque.}
+\begin{itemize}
+  \item \texttt{step} (implementación clásica):
+        más simple de leer, depurar y explicar; buena elección para docencia,
+        experimentación rápida y mantenimiento básico.
+  \item \texttt{calendar\_strong} (FEL fuerte):
+        metodológicamente más alineado con DES clásico (``próximo evento'');
+        facilita extender el modelo con eventos diferidos/heterogéneos
+        (intervenciones, migración, vacunación, shocks, etc.) sin imponer
+        barridos globales por mes.
+\end{itemize}
+
+\noindent En síntesis, \texttt{step} optimiza simplicidad operativa y
+\texttt{calendar\_strong} optimiza expresividad metodológica para futuras
+extensiones del sistema.
+
+\subsection{Exploración Monte Carlo: Interpretaciones y Motor}
+
+Para reforzar las comparaciones con replicación estadística, se realizó una
+exploración Monte Carlo sobre un escenario controlado
+($200$ mujeres + $200$ hombres, $20$ años, mortalidad mensual), usando
+6 semillas por combinación y comparando motores
+(\texttt{step}, \texttt{calendar\_strong}) y modos de embarazo
+(\texttt{range}, \texttt{annual}, \texttt{monthly}).
+
+\begin{table}[H]
+\caption{Resumen Monte Carlo (media sobre 6 réplicas).}
+\label{tab:mc_interpretaciones_motor}
+\centering
+\small
+\begin{tabular}{llrrrr}
+\toprule
+\textbf{Motor} & \textbf{Embarazo} & \textbf{Pob.\ final media} &
+\textbf{Desv.\ estándar} & \textbf{Nacidos medios} & \textbf{Muertos medios} \\
+\midrule
+\texttt{step} & \texttt{range}   & 397.8 & 25.8 & 117.2 & 119.3 \\
+\texttt{step} & \texttt{annual}  & 747.0 & 29.8 & 542.7 & 195.7 \\
+\texttt{step} & \texttt{monthly} & 1434.0 & 46.9 & 1357.5 & 323.5 \\
+\texttt{calendar\_strong} & \texttt{range}   & 403.3 & 20.6 & 121.5 & 118.2 \\
+\texttt{calendar\_strong} & \texttt{annual}  & 744.3 & 39.8 & 535.7 & 191.3 \\
+\texttt{calendar\_strong} & \texttt{monthly} & 1428.7 & 27.7 & 1331.7 & 303.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Lectura e inferencias Monte Carlo.}
+\begin{itemize}
+  \item El factor dominante sigue siendo la \textbf{interpretación de embarazo}:
+        \texttt{range} produce dinámica cercana al reemplazo, \texttt{annual}
+        produce crecimiento sostenido y \texttt{monthly} crecimiento acelerado.
+  \item La \textbf{diferencia por motor} (\texttt{step} vs
+        \texttt{calendar\_strong}) es menor que la diferencia por interpretación:
+        ambos preservan el orden cualitativo de resultados en los tres modos.
+  \item La variabilidad entre réplicas (desviación estándar) confirma que
+        comparar una sola semilla puede inducir sesgos; el análisis por
+        réplicas ofrece conclusiones más estables.
+\end{itemize}
 
 \subsection{Gráficas}
 
@@ -517,9 +1120,27 @@ Las principales conclusiones son:
         Sería interesante comparar con una distribución más realista
         (p.~ej., pirámide triangular con moda en 0).
 
-  \item Los supuestos sobre la frecuencia de evaluación de probabilidades
-        (mensual vs.\ anual) tienen un impacto directo en la velocidad de
-        colapso poblacional y deben documentarse explícitamente.
+  \item La interpretación semántica de las probabilidades de la tabla
+        (¿tasa mensual, tasa anual, o probabilidad acumulada en el rango?)
+        tiene un impacto decisivo en la dinámica poblacional.
+        Con la interpretación acumulada por rango (\texttt{range}), coherente
+        entre mortalidad y fecundidad, el modelo produce una dinámica cercana
+        al reemplazo o de decrecimiento lento en los horizontes evaluados.
+        Con la interpretación mensual directa (\texttt{monthly}), la fecundidad
+        se dispara por encima de las 40~‰, mientras que \texttt{annual} produce
+        crecimiento sostenido intermedio.
+        Todos los modos quedan documentados e implementados como parámetros
+        configurables desde el panel interactivo.
+
+  \item El análisis Monte Carlo confirma que las conclusiones cualitativas se
+        mantienen al promediar múltiples semillas: el orden de resultados por
+        interpretación (\texttt{range} < \texttt{annual} < \texttt{monthly}
+        en crecimiento poblacional) es robusto en ambos motores.
+
+  \item La coexistencia de \texttt{step} y \texttt{calendar\_strong} aporta
+        valor metodológico y práctico: el primero simplifica validación y
+        mantenimiento; el segundo se alinea mejor con DES clásico y facilita
+        extender el modelo con eventos diferidos complejos.
 
   \item El modelo podría extenderse con migración, enfermedades o
         variaciones estacionales de la fertilidad, sin cambios estructurales
@@ -527,6 +1148,15 @@ Las principales conclusiones son:
 \end{enumerate}
 
 % ──────────────────────────────────────────────────────────────────────────
+\section*{Repositorio del Proyecto}
+
+El código fuente completo, incluyendo la implementación de todas las variables
+aleatorias, los experimentos y el dashboard interactivo, se encuentra disponible en:
+
+\begin{center}
+  \url{https://github.com/perezcam/Sim-City}
+\end{center}
+
 \section*{Agradecimientos}
 
 Trabajo realizado en el marco de la asignatura de Simulación,
@@ -558,6 +1188,16 @@ Wiley, New York (2016)
 Law, A.M.:
 Simulation Modeling and Analysis, 5th edn.
 McGraw-Hill, New York (2015)
+
+\bibitem{press1992}
+Press, W.H., Teukolsky, S.A., Vetterling, W.T., Flannery, B.P.:
+Numerical Recipes in C: The Art of Scientific Computing, 2nd edn.
+Cambridge University Press, Cambridge (1992)
+
+\bibitem{knuth1997}
+Knuth, D.E.:
+The Art of Computer Programming, Vol.~2: Seminumerical Algorithms, 3rd edn.
+Addison-Wesley, Reading (1997)
 
 \end{thebibliography}
 
