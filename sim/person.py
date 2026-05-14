@@ -59,8 +59,6 @@ class Person:
         duration = int(round(random_vars.exponential(mean)))
         self.solitude_months_remaining = max(1, duration)
         self.couple_id = None
-        self.pregnant = False
-        self.pregnancy_months_remaining = 0
 
     def __repr__(self) -> str:
         status = "vivo" if self.alive else "muerto"

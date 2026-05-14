@@ -63,6 +63,33 @@ def max_generations(G: nx.DiGraph) -> int:
     return max(depths.values(), default=0) + 1
 
 
+def subtree_bfs(G: nx.DiGraph, max_nodes: int) -> nx.DiGraph:
+    """
+    Return a subgraph of at most max_nodes nodes that preserves generational
+    structure.  Picks the founder with the most descendants and expands via BFS.
+    """
+    roots = [n for n in G.nodes if G.in_degree(n) == 0]
+    if not roots:
+        nodes = list(G.nodes)[:max_nodes]
+        return G.subgraph(nodes).copy()
+
+    # Choose the founder whose subtree is largest
+    best_root = max(roots, key=lambda r: len(nx.descendants(G, r)))
+
+    visited: list[int] = []
+    queue = [best_root]
+    seen: set[int] = {best_root}
+    while queue and len(visited) < max_nodes:
+        node = queue.pop(0)
+        visited.append(node)
+        for child in G.successors(node):
+            if child not in seen:
+                seen.add(child)
+                queue.append(child)
+
+    return G.subgraph(visited).copy()
+
+
 def export_gexf(G: nx.DiGraph, path: str) -> None:
     """Export graph to GEXF format (readable by Gephi)."""
     nx.write_gexf(G, path)

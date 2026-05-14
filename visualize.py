@@ -201,9 +201,11 @@ def plot_sensitivity(results: list[dict], save_path: str | None = None) -> None:
     """
     Visualize sensitivity analysis results.
     `results` is the list returned by sim.sensitivity.run_sensitivity().
+    Entries with a 'hypothesis_test' key (appended by run_sensitivity) are ignored.
     """
-    strategies = sorted({r["age_strategy"] for r in results})
-    sizes      = sorted({r["n_total"]      for r in results})
+    scenario_results = [r for r in results if "hypothesis_test" not in r]
+    strategies = sorted({r["age_strategy"] for r in scenario_results})
+    sizes      = sorted({r["n_total"]      for r in scenario_results})
     colors     = ["steelblue", "seagreen", "darkorange", "crimson"]
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
@@ -224,7 +226,7 @@ def plot_sensitivity(results: list[dict], save_path: str | None = None) -> None:
             vals = []
             errs = []
             for size in sizes:
-                row = next(r for r in results
+                row = next(r for r in scenario_results
                            if r["n_total"] == size and r["age_strategy"] == strategy)
                 v = row[key]
                 vals.append(v if v is not None else 0)
@@ -279,10 +281,10 @@ def plot_family_tree(
         print("No hay árbol genealógico para mostrar (ningún nacimiento registrado).")
         return
 
-    # Limit size for readability
+    # Limit size for readability using BFS from best founder
     if G.number_of_nodes() > max_nodes:
-        nodes = list(G.nodes)[:max_nodes]
-        G = G.subgraph(nodes).copy()
+        from sim.genealogy import subtree_bfs
+        G = subtree_bfs(G, max_nodes)
 
     depths = generation_depths(G)
     n_gen  = max(depths.values(), default=0) + 1
