@@ -1,10 +1,24 @@
 # Sim-City — Poblado en Evolución
 
-Simulación de eventos discretos de una dinámica poblacional durante 100 años.
-El sistema modela mes a mes: mortalidad por rangos de edad, formación y ruptura
-de parejas, embarazos y nacimientos múltiples, y registra estadísticas agregadas
-por año. Incluye dos motores (paso mensual y lista de eventos futuros), análisis
-Monte Carlo, análisis de sensibilidad y árbol genealógico.
+Simulación de una dinámica poblacional durante 100 años que modela mortalidad
+por rangos de edad, formación y ruptura de parejas, embarazos y nacimientos
+múltiples. Incluye análisis Monte Carlo, análisis de sensibilidad y árbol
+genealógico.
+
+El proyecto implementa dos enfoques de simulación:
+
+- **Motor mensual (`step`)** — avanza el tiempo en pasos fijos de un mes.
+  En cada paso aplica las 7 fases del modelo (envejecimiento, muertes,
+  rupturas, soledad, emparejamiento, embarazos y nacimientos) a toda la
+  población de forma sincrónica.
+
+- **Motor de calendario de eventos (`calendar_strong`)** — usa una Lista de
+  Eventos Futuros (FEL). Cada entidad programa su próximo evento
+  individualmente (p.ej. su propia muerte o el nacimiento de un hijo) y el
+  motor los procesa en orden cronológico estricto. Esto permite saltar
+  directamente al siguiente evento relevante sin iterar meses vacíos,
+  reproduciendo con mayor fidelidad la asincronía real de los procesos
+  demográficos.
 
 ## Requisitos
 
@@ -100,13 +114,7 @@ parejas, distribución etaria y edad promedio.
 
 ## Experimentos
 
-| Experimento | N inicial | Pico | Año pico | Nacidos | Muertos | Población final |
-|---|---:|---:|---:|---:|---:|---:|
-| E1 (100+100, seed=0) | 200 | 209 | 6 | 151 | 243 | 108 |
-| E2 (500+500, seed=42) | 1000 | 1046 | 12 | 1361 | 1465 | 896 |
-| E3 (1000+1000, seed=7) | 2000 | 2079 | 11 | 2535 | 2803 | 1732 |
-
-Para reproducirlos:
+Para reproducir los experimentos base del proyecto:
 
 ```bash
 python main.py --mujeres 100 --hombres 100 --años 100 --seed 0 --no-plot
